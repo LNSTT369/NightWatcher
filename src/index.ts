@@ -1,9 +1,9 @@
 import type { Env } from "./env.d";
-import { MahoragaMcpAgent } from "./mcp/agent";
+import { NightwatcherMcpAgent } from "./mcp/agent";
 import { handleCronEvent } from "./jobs/cron";
 
 export { SessionDO } from "./durable-objects/session";
-export { MahoragaMcpAgent };
+export { NightwatcherMcpAgent };
 
 export default {
   async fetch(
@@ -29,7 +29,7 @@ export default {
     if (url.pathname === "/") {
       return new Response(
         JSON.stringify({
-          name: "mahoraga",
+          name: "nightwatcher",
           version: "0.1.0",
           description: "Cloudflare Workers MCP server for autonomous stock trading",
           endpoints: {
@@ -44,7 +44,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/mcp")) {
-      return MahoragaMcpAgent.mount("/mcp", { binding: "MCP_AGENT" }).fetch(request, env, ctx);
+      return NightwatcherMcpAgent.mount("/mcp", { binding: "MCP_AGENT" }).fetch(request, env, ctx);
     }
 
     return new Response("Not found", { status: 404 });

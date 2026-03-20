@@ -9,6 +9,7 @@ export interface Env {
   ALPACA_PAPER?: string;
   OPENAI_API_KEY?: string;
   TWITTER_BEARER_TOKEN?: string;
+  GEMINI_API_KEY?: string;
   KILL_SWITCH_SECRET: string;
 
   ENVIRONMENT: string;

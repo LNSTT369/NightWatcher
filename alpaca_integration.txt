@@ -1,0 +1,17 @@
+# The Power of Alpaca Integration in Nightwatcher V2
+
+The Alpaca API is the central nervous system that connects Nightwatcher V2's artificial intelligence to the actual financial markets. While the LLM and orchestrator act as the "brain," Alpaca acts as the "hands," making the system a true end-to-end trading agent.
+
+Here is why the deep integration with Alpaca is so critical to the system's success:
+
+## 1. Institutional-Grade Execution Engine
+Nightwatcher generates signals in milliseconds, but those signals are useless without a fast execution layer. Alpaca provides zero-commission, direct API access to the markets. When Nightwatcher's LLM validates a catalyst, an order is instantly fired to Alpaca for execution without any human latency. This ensures you get into breakout positions exactly when the catalyst hits.
+
+## 2. Unified Equities & 24/7 Crypto
+The market doesn't sleep, and neither does Nightwatcher. Because Alpaca supports both traditional stock equities and cryptocurrency trading, the agent can seamlessly pivot between asset classes. While the stock market closes at 4 PM EST, the orchestrator continues to track crypto momentum over the weekend and execute trades 24/7 using the exact same Alpaca architecture.
+
+## 3. Real-Time Market Data & Portfolio Health
+Nightwatcher's intelligence depends on real-time data. Alpaca supplies the agent with live stock quotes, historical OHLCV bars, and bid/ask spreads. Furthermore, Alpaca is the source of truth for the dashboard's "Portfolio Performance" metrics, effortlessly syncing your cash balances, buying power, active positions, and unrealized P&L so the agent knows exactly how much capital it's allowed to deploy.
+
+## 4. Programmatic Risk Management
+Through the Alpaca API, Nightwatcher can programmatically enforce strict risk management rules. Before submitting any order, the agent validates the trade against the current Alpaca account status to ensure it doesn't violate your preset `max_position_value` or `stop_loss_pct` thresholds. This protects your downside natively at the broker level.

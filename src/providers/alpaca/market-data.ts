@@ -88,14 +88,78 @@ function parseSnapshot(symbol: string, raw: AlpacaSnapshot): Snapshot {
   };
 }
 
+
+// Crypto Interfaces
+interface AlpacaCryptoBar {
+  t: string;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  n: number;
+  vw: number;
+}
+
+interface AlpacaCryptoBarsResponse {
+  bars: Record<string, AlpacaCryptoBar[]>;
+  next_page_token?: string;
+}
+
+interface AlpacaCryptoSnapshot {
+  latestTrade: {
+    p: number;
+    s: number;
+    t: string;
+    i: number;
+  };
+  latestQuote: {
+    bp: number;
+    bs: number;
+    ap: number;
+    as: number;
+    t: string;
+  };
+  minuteBar: AlpacaCryptoBar;
+  dailyBar: AlpacaCryptoBar;
+  prevDailyBar: AlpacaCryptoBar;
+}
+
+interface AlpacaCryptoSnapshotsResponse {
+  snapshots: Record<string, AlpacaCryptoSnapshot>;
+}
+
 export class AlpacaMarketDataProvider implements MarketDataProvider {
-  constructor(private client: AlpacaClient) {}
+  constructor(private client: AlpacaClient) { }
+
+  private isCrypto(symbol: string): boolean {
+    return symbol.includes('/');
+  }
 
   async getBars(
     symbol: string,
     timeframe: string,
     params?: BarsParams
   ): Promise<Bar[]> {
+    if (this.isCrypto(symbol)) {
+      const response = await this.client.dataRequest<AlpacaCryptoBarsResponse>(
+        "GET",
+        `/v1beta3/crypto/us/bars`,
+        {
+          symbols: symbol,
+          timeframe,
+          start: params?.start,
+          end: params?.end,
+          limit: params?.limit,
+        }
+      );
+
+      if (!response.bars || !response.bars[symbol]) {
+        return [];
+      }
+      return response.bars[symbol].map(parseBar);
+    }
+
     const response = await this.client.dataRequest<AlpacaBarsResponse | { bars: AlpacaBar[] }>(
       "GET",
       `/v2/stocks/${encodeURIComponent(symbol)}/bars`,
@@ -122,6 +186,13 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
   }
 
   async getLatestBar(symbol: string): Promise<Bar> {
+    // Crypto doesn't have a specific "latest bar" endpoint usually, just use getBars with limit 1
+    if (this.isCrypto(symbol)) {
+      const bars = await this.getBars(symbol, "1Min", { limit: 1 });
+      if (bars.length === 0) throw new Error(`No bar data for ${symbol}`);
+      return bars[0]!;
+    }
+
     const response = await this.client.dataRequest<AlpacaLatestBarsResponse>(
       "GET",
       `/v2/stocks/${encodeURIComponent(symbol)}/bars/latest`
@@ -135,6 +206,11 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
   }
 
   async getLatestBars(symbols: string[]): Promise<Record<string, Bar>> {
+    // Mixed symbols complexity omitted for now - assuming all stock or caller handles separation
+    // For simplicity, falling back to stock implementation or erroring if mixed could be better, 
+    // but here we just keep stock logic. To support batch crypto, we'd need more logic.
+    // Assuming this is mostly used for stocks in this version.
+
     const response = await this.client.dataRequest<AlpacaLatestBarsResponse>(
       "GET",
       "/v2/stocks/bars/latest",
@@ -149,6 +225,13 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
   }
 
   async getQuote(symbol: string): Promise<Quote> {
+    if (this.isCrypto(symbol)) {
+      // Crypto quotes not fully implemented here as getSnapshot is preferred
+      // But we can implement via snapshot if needed, or specific quote endpoint
+      const snapshot = await this.getSnapshot(symbol);
+      return snapshot.latest_quote;
+    }
+
     const response = await this.client.dataRequest<AlpacaQuotesResponse>(
       "GET",
       `/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest`
@@ -176,6 +259,39 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
   }
 
   async getSnapshot(symbol: string): Promise<Snapshot> {
+    if (this.isCrypto(symbol)) {
+      const response = await this.client.dataRequest<AlpacaCryptoSnapshotsResponse>(
+        "GET",
+        "/v1beta3/crypto/us/snapshots",
+        { symbols: symbol }
+      );
+
+      const snapshot = response.snapshots && response.snapshots[symbol];
+      if (!snapshot) {
+        throw new Error(`No snapshot data for ${symbol}`);
+      }
+
+      return {
+        symbol,
+        latest_trade: {
+          price: snapshot.latestTrade.p,
+          size: snapshot.latestTrade.s,
+          timestamp: snapshot.latestTrade.t,
+        },
+        latest_quote: {
+          symbol,
+          bid_price: snapshot.latestQuote.bp,
+          bid_size: snapshot.latestQuote.bs,
+          ask_price: snapshot.latestQuote.ap,
+          ask_size: snapshot.latestQuote.as,
+          timestamp: snapshot.latestQuote.t,
+        },
+        minute_bar: snapshot.minuteBar ? parseBar(snapshot.minuteBar) : { t: new Date().toISOString(), o: 0, h: 0, l: 0, c: 0, v: 0, n: 0, vw: 0 },
+        daily_bar: snapshot.dailyBar ? parseBar(snapshot.dailyBar) : { t: new Date().toISOString(), o: 0, h: 0, l: 0, c: 0, v: 0, n: 0, vw: 0 },
+        prev_daily_bar: snapshot.prevDailyBar ? parseBar(snapshot.prevDailyBar) : { t: new Date().toISOString(), o: 0, h: 0, l: 0, c: 0, v: 0, n: 0, vw: 0 },
+      };
+    }
+
     const response = await this.client.dataRequest<AlpacaSnapshotsResponse | AlpacaSnapshot>(
       "GET",
       `/v2/stocks/${encodeURIComponent(symbol)}/snapshot`

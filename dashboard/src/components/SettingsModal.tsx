@@ -32,8 +32,8 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <Panel 
-        title="TRADING CONFIGURATION" 
+      <Panel
+        title="TRADING CONFIGURATION"
         className="w-full max-w-2xl max-h-[90vh] overflow-auto"
         titleRight={
           <button onClick={onClose} className="hud-label hover:text-hud-primary">
@@ -176,20 +176,22 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
                   value={localConfig.llm_model}
                   onChange={e => handleChange('llm_model', e.target.value)}
                 >
+                  <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                  <option value="gemini-1.5-flash">gemini-1.5-flash</option>
                   <option value="gpt-4o-mini">gpt-4o-mini</option>
-                  <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
                 </select>
               </div>
               <div>
                 <label className="hud-label block mb-1">Analyst Model (smart)</label>
                 <select
                   className="hud-input w-full"
-                  value={localConfig.llm_analyst_model || 'gpt-4o'}
+                  value={localConfig.llm_analyst_model || 'gemini-2.0-flash'}
                   onChange={e => handleChange('llm_analyst_model', e.target.value)}
                 >
-                  <option value="gpt-5.2-2025-12-11">GPT-5.2 (best)</option>
+                  <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                  <option value="gemini-1.5-pro">gemini-1.5-pro</option>
                   <option value="gpt-4o">gpt-4o</option>
-                  <option value="gpt-4o-mini">gpt-4o-mini (cheaper)</option>
+                  <option value="gpt-5.2-2025-12-11">GPT-5.2 (best)</option>
                 </select>
               </div>
             </div>
@@ -451,8 +453,8 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
             <button className="hud-button" onClick={onClose}>
               Cancel
             </button>
-            <button 
-              className="hud-button" 
+            <button
+              className="hud-button"
               onClick={handleSave}
               disabled={saving}
             >

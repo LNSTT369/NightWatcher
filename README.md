@@ -3,13 +3,13 @@
 
 
 
-# MAHORAGA
+# NIGHTWATCHER
 
 An autonomous, LLM-powered trading agent that adapts to social sentiment and makes trading decisions using AI.
 
 [![Discord](https://img.shields.io/discord/1467592472158015553?color=7289da&label=Discord&logo=discord&logoColor=white)](https://discord.gg/Ys8KpsW5NN)
 
-MAHORAGA scrapes StockTwits for trending stocks, uses OpenAI to analyze signals and research opportunities, then executes trades through Alpaca. It's designed as a starting point for building your own agentic trading strategies.
+NIGHTWATCHER scrapes StockTwits for trending stocks, uses OpenAI to analyze signals and research opportunities, then executes trades through Alpaca. It's designed as a starting point for building your own agentic trading strategies.
 
 <img width="1278" height="957" alt="dashboard" src="https://github.com/user-attachments/assets/56473ab6-e2c6-45fc-9e32-cf85e69f1a2d" />
 
@@ -36,8 +36,8 @@ MAHORAGA scrapes StockTwits for trending stocks, uses OpenAI to analyze signals 
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/ygwyg/MAHORAGA.git
-cd mahoraga
+git clone https://github.com/ygwyg/NIGHTWATCHER.git
+cd nightwatcher
 npm install
 cd dashboard && npm install && cd ..
 ```
@@ -227,7 +227,7 @@ The dashboard shows real-time LLM cost tracking.
 ## Project Structure
 
 ```
-mahoraga/
+nightwatcher/
 ├── agent-v1.mjs              # Trading agent - COPY AND MODIFY THIS
 ├── .dev.vars                 # API keys (DO NOT COMMIT)
 ├── agent-config.json         # Runtime config (DO NOT COMMIT)

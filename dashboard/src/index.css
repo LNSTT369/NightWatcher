@@ -25,6 +25,26 @@
   
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
 }
+:root.light {
+  --color-hud-bg: #f8fafc;
+  --color-hud-bg-panel: #ffffff;
+  
+  --color-hud-primary: #5a7a88;
+  --color-hud-dim: #cbd5e1;
+  --color-hud-line: rgba(90, 122, 136, 0.2);
+  --color-hud-border: rgba(90, 122, 136, 0.25);
+  
+  --color-hud-text: #334155;
+  --color-hud-text-dim: #64748b;
+  --color-hud-text-bright: #0f172a;
+  
+  /* Adjust status colors for better contrast on light bg */
+  --color-hud-success: #15803d;
+  --color-hud-warning: #b45309;
+  --color-hud-error: #b91c1c;
+  --color-hud-purple: #7e22ce;
+  --color-hud-cyan: #0e7490;
+}
 
 @layer base {
   * {

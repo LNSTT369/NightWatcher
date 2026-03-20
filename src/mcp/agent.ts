@@ -34,14 +34,16 @@ import {
 import { computeTechnicals, detectSignals, type TechnicalIndicators, type Signal } from "../providers/technicals";
 import { scrapeUrl, extractFinancialData, isAllowedDomain } from "../providers/scraper";
 import { createOpenAIProvider } from "../providers/llm/openai";
-import { classifyEvent, generateResearchReport, summarizeLearnedRules } from "../providers/llm/classifier";
+import { createGeminiProvider } from "../providers/llm/gemini";
+import { classifyEvent, generateResearchReport, summarizeLearnedRules, generateTradingDecision } from "../providers/llm/classifier";
 import { getDTE } from "../providers/alpaca/options";
 import type { LLMProvider, OptionsProvider } from "../providers/types";
 import type { OptionsOrderPreview } from "./types";
 
-export class MahoragaMcpAgent extends McpAgent<Env> {
+export class NightwatcherMcpAgent extends McpAgent<Env> {
+  // @ts-ignore
   server = new McpServer({
-    name: "mahoraga",
+    name: "nightwatcher",
     version: "0.1.0",
   });
 
@@ -62,6 +64,8 @@ export class MahoragaMcpAgent extends McpAgent<Env> {
 
     if (this.env.OPENAI_API_KEY && this.env.FEATURE_LLM_RESEARCH === "true") {
       this.llm = createOpenAIProvider({ apiKey: this.env.OPENAI_API_KEY });
+    } else if (this.env.GEMINI_API_KEY && this.env.FEATURE_LLM_RESEARCH === "true") {
+      this.llm = createGeminiProvider({ apiKey: this.env.GEMINI_API_KEY });
     }
 
     this.options = alpaca.options;
@@ -214,6 +218,36 @@ export class MahoragaMcpAgent extends McpAgent<Env> {
             provider_calls: 3,
           });
 
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (error) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    this.server.tool(
+      "portfolio-history",
+      "Get historical portfolio equity and P&L over a specific period",
+      {
+        period: z.enum(["1D", "1W", "1M", "1A"]).optional(),
+        timeframe: z.enum(["1Min", "5Min", "15Min", "1H", "1D"]).optional(),
+      },
+      async ({ period, timeframe }) => {
+        const startTime = Date.now();
+        try {
+          const history = await alpaca.trading.getPortfolioHistory(period, timeframe);
+          const result = success(history);
+          await insertToolLog(db, {
+            request_id: this.requestId,
+            tool_name: "portfolio-history",
+            input: { period, timeframe },
+            output: result,
+            latency_ms: Date.now() - startTime,
+            provider_calls: 1,
+          });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (error) {
           return {
@@ -559,11 +593,11 @@ export class MahoragaMcpAgent extends McpAgent<Env> {
   private registerUtilityTools() {
     this.server.tool(
       "help-usage",
-      "Get help information about using Mahoraga",
+      "Get help information about using Nightwatcher",
       {},
       async () => {
         const result = success({
-          name: "Mahoraga MCP Trading Server",
+          name: "Nightwatcher MCP Trading Server",
           version: "0.1.0",
           order_flow: ["1. orders-preview -> get approval_token", "2. orders-submit with token"],
           quick_start: ["auth-verify", "portfolio-get", "risk-status", "orders-preview", "orders-submit"],
@@ -1112,6 +1146,70 @@ export class MahoragaMcpAgent extends McpAgent<Env> {
     );
 
     this.server.tool(
+      "llm-prompt",
+      "Run a raw prompt against the configured LLM",
+      { prompt: z.string().min(1) },
+      async ({ prompt }) => {
+        if (!this.llm) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_SUPPORTED, message: "LLM feature not enabled" }), null, 2) }], isError: true };
+        }
+        try {
+          const res = await this.llm.complete({ messages: [{ role: "user", content: prompt }] });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(res.content), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "symbol-analyze",
+      "Analyze a symbol using AI to get a structured trading decision (BUY/SELL/HOLD + Confidence)",
+      { symbol: z.string() },
+      async ({ symbol }) => {
+        const startTime = Date.now();
+        const db = createD1Client(this.env.DB);
+        const alpaca = createAlpacaProviders(this.env);
+
+        if (!this.llm) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_SUPPORTED, message: "LLM not configured" }), null, 2) }], isError: true };
+        }
+
+        try {
+          // 1. Get Technicals
+          const bars = await alpaca.marketData.getBars(symbol.toUpperCase(), "1Day", { limit: 100 });
+          const technicals = computeTechnicals(symbol, bars);
+
+          // 2. Get News (optional, simplified for beta)
+          const news: any[] = [];
+
+          // 3. Generate Decision
+          // @ts-ignore - generateTradingDecision is newly added
+          const decision = await generateTradingDecision(
+            this.llm,
+            symbol,
+            technicals.price,
+            technicals,
+            news
+          );
+
+          await insertToolLog(db, {
+            request_id: this.requestId,
+            tool_name: "symbol-analyze",
+            input: { symbol },
+            output: decision,
+            latency_ms: Date.now() - startTime,
+            provider_calls: 1,
+          });
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(decision), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
       "web-scrape-financial",
       "Scrape financial data from allowed domains (finance.yahoo.com, sec.gov, stockanalysis.com, companiesmarketcap.com)",
       {
@@ -1203,7 +1301,7 @@ export class MahoragaMcpAgent extends McpAgent<Env> {
         const startTime = Date.now();
         const db = createD1Client(this.env.DB);
         const alpaca = createAlpacaProviders(this.env);
-        
+
         if (!this.options || !this.options.isConfigured()) {
           return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_SUPPORTED, message: "Options provider not configured" }), null, 2) }], isError: true };
         }
@@ -1366,7 +1464,7 @@ export class MahoragaMcpAgent extends McpAgent<Env> {
     const dateStr = match[2];
     const typeChar = match[3];
     const strikeStr = match[4];
-    
+
     if (!underlying || !dateStr || !typeChar || !strikeStr) return null;
 
     const year = 2000 + parseInt(dateStr.slice(0, 2), 10);

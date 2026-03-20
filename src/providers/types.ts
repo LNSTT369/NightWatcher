@@ -24,6 +24,15 @@ export interface Account {
   created_at: string;
 }
 
+export interface PortfolioHistory {
+  timestamp: number[];
+  equity: number[];
+  profit_loss: number[];
+  profit_loss_pct: number[];
+  base_value: number;
+  timeframe: string;
+}
+
 export interface Position {
   asset_id: string;
   symbol: string;
@@ -181,6 +190,7 @@ export interface BrokerProvider {
 
   getClock(): Promise<MarketClock>;
   getCalendar(start: string, end: string): Promise<MarketDay[]>;
+  getPortfolioHistory(period?: string, timeframe?: string): Promise<PortfolioHistory>;
 }
 
 export interface MarketDataProvider {

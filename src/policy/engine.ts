@@ -43,7 +43,7 @@ export interface OptionsPolicyContext {
 }
 
 export class PolicyEngine {
-  constructor(public config: PolicyConfig) {}
+  constructor(public config: PolicyConfig) { }
 
   evaluate(ctx: PolicyContext): PolicyResult {
     const violations: PolicyViolation[] = [];
@@ -114,6 +114,10 @@ export class PolicyEngine {
     warnings: PolicyWarning[]
   ): void {
     if (!this.config.trading_hours_only) return;
+    
+    const isCrypto = ctx.order.symbol.includes("/") || 
+      ["BTC", "ETH", "SOL", "LTC", "BCH", "DOGE", "SHIB", "AVAX", "LINK", "UNI", "MATIC"].some(c => ctx.order.symbol.startsWith(c) && ctx.order.symbol.endsWith("USD"));
+    if (isCrypto) return; // Crypto trades 24/7
 
     if (!ctx.clock.is_open) {
       if (!this.config.extended_hours_allowed) {
@@ -294,7 +298,7 @@ export class PolicyEngine {
     this.checkCooldown(ctx as unknown as PolicyContext, violations);
     this.checkDailyLossLimit(ctx as unknown as PolicyContext, violations);
     this.checkTradingHours(ctx as unknown as PolicyContext, violations, warnings);
-    
+
     this.checkOptionsEnabled(violations);
     this.checkOptionsDTE(ctx, violations);
     this.checkOptionsDelta(ctx, violations, warnings);
@@ -464,7 +468,7 @@ export class PolicyEngine {
     const existingPosition = optionsPositions.find(
       p => p.symbol.toUpperCase() === ctx.order.contract_symbol.toUpperCase()
     );
-    
+
     if (!existingPosition && optionsPositions.length >= this.config.options.max_option_positions) {
       violations.push({
         rule: "options_max_positions",

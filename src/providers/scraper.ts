@@ -45,7 +45,7 @@ export async function scrapeUrl(url: string): Promise<ScrapeResult> {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; Mahoraga/1.0; +https://example.com/bot)",
+        "User-Agent": "Mozilla/5.0 (compatible; Nightwatcher/1.0; +https://example.com/bot)",
         Accept: "text/html,application/xhtml+xml",
       },
     });

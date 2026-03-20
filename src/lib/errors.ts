@@ -25,14 +25,14 @@ export interface ToolError {
   details?: unknown;
 }
 
-export class MahoragaError extends Error {
+export class NightwatcherError extends Error {
   constructor(
     public readonly code: ErrorCode,
     message: string,
     public readonly details?: unknown
   ) {
     super(message);
-    this.name = "MahoragaError";
+    this.name = "NightwatcherError";
   }
 
   toToolError(): ToolError {
@@ -48,6 +48,6 @@ export function createError(
   code: ErrorCode,
   message: string,
   details?: unknown
-): MahoragaError {
-  return new MahoragaError(code, message, details);
+): NightwatcherError {
+  return new NightwatcherError(code, message, details);
 }

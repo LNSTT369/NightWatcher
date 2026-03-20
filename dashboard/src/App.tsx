@@ -69,7 +69,7 @@ function generateMockPortfolioHistory(equity: number, points: number = 24): Port
   const now = Date.now()
   const interval = 3600000 // 1 hour in ms
   let value = equity * 0.95 // Start slightly lower
-  
+
   for (let i = points; i >= 0; i--) {
     const change = (Math.random() - 0.45) * equity * 0.005 // Small random walk with slight upward bias
     value = Math.max(value + change, equity * 0.8)
@@ -96,7 +96,7 @@ function generateMockPriceHistory(currentPrice: number, unrealizedPl: number, po
   const prices: number[] = []
   const isPositive = unrealizedPl >= 0
   const startPrice = currentPrice * (isPositive ? 0.95 : 1.05)
-  
+
   for (let i = 0; i < points; i++) {
     const progress = i / (points - 1)
     const trend = startPrice + (currentPrice - startPrice) * progress
@@ -107,7 +107,76 @@ function generateMockPriceHistory(currentPrice: number, unrealizedPl: number, po
   return prices
 }
 
+// Icons
+function SunIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </svg>
+  )
+}
+
+function MoonIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+    </svg>
+  )
+}
+
 export default function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem('theme') as 'light' | 'dark' || 'dark'
+    }
+    return 'dark'
+  })
+
+  // Apply theme class to html element
+  useEffect(() => {
+    const root = window.document.documentElement
+    if (theme === 'light') {
+      root.classList.add('light')
+    } else {
+      root.classList.remove('light')
+    }
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'light' ? 'dark' : 'light')
+  }
+
   const [status, setStatus] = useState<Status | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -115,7 +184,10 @@ export default function App() {
   const [setupChecked, setSetupChecked] = useState(false)
   const [time, setTime] = useState(new Date())
   const [portfolioHistory, setPortfolioHistory] = useState<PortfolioSnapshot[]>([])
+  const [historyPeriod, setHistoryPeriod] = useState<'1D' | '1W' | '1M'>('1D')
   const logsEndRef = useRef<HTMLDivElement>(null)
+
+  // ... (rest of the hooks remain the same) ...
 
   useEffect(() => {
     const checkSetup = async () => {
@@ -141,25 +213,8 @@ export default function App() {
         if (data.ok) {
           setStatus(data.data)
           setError(null)
-          
-          // Generate mock portfolio history if we have account data but no history
-          if (data.data.account && portfolioHistory.length === 0) {
-            setPortfolioHistory(generateMockPortfolioHistory(data.data.account.equity))
-          } else if (data.data.account) {
-            // Append new data point on each fetch
-            setPortfolioHistory(prev => {
-              const now = Date.now()
-              const newSnapshot: PortfolioSnapshot = {
-                timestamp: now,
-                equity: data.data.account.equity,
-                pl: data.data.account.equity - (prev[0]?.equity || data.data.account.equity),
-                pl_pct: prev[0] ? ((data.data.account.equity - prev[0].equity) / prev[0].equity) * 100 : 0,
-              }
-              // Keep last 48 points (4 hours at 5-second intervals, or display fewer if needed)
-              const updated = [...prev, newSnapshot].slice(-48)
-              return updated
-            })
-          }
+
+          // Removed mock portfolio generation from status polling
         } else {
           setError(data.error || 'Failed to fetch status')
         }
@@ -179,6 +234,45 @@ export default function App() {
       }
     }
   }, [setupChecked, showSetup])
+
+  useEffect(() => {
+    if (!setupChecked || showSetup) return;
+    const fetchHistory = async () => {
+      try {
+        const tf = historyPeriod === '1D' ? '15Min' : (historyPeriod === '1W' ? '1H' : '1D');
+        const res = await fetch(`${API_BASE}/portfolio/history?period=${historyPeriod}&timeframe=${tf}`);
+        const json = await res.json();
+        if (json.ok && json.data) {
+          const { timestamp, equity, profit_loss, profit_loss_pct } = json.data;
+          if (timestamp && equity) {
+            const mapped = timestamp.map((t: number, i: number) => ({
+              timestamp: t * 1000, // alpaca returns seconds
+              equity: equity[i] || 0,
+              pl: profit_loss ? profit_loss[i] : 0,
+              pl_pct: profit_loss_pct ? profit_loss_pct[i] * 100 : 0,
+            })).filter((m: PortfolioSnapshot) => m.equity > 0);
+            
+            if (mapped.length > 1) {
+              setPortfolioHistory(mapped);
+            } else if (status?.account) {
+              setPortfolioHistory(generateMockPortfolioHistory(status.account.equity));
+            }
+          }
+        } else if (status?.account) {
+          setPortfolioHistory(generateMockPortfolioHistory(status.account.equity));
+        }
+      } catch (err) {
+        console.error('Failed to fetch portfolio history', err);
+        if (status?.account && portfolioHistory.length <= 1) {
+          setPortfolioHistory(generateMockPortfolioHistory(status.account.equity));
+        }
+      }
+    };
+    
+    fetchHistory();
+    const interval = setInterval(fetchHistory, 60000); // refresh every minute
+    return () => clearInterval(interval);
+  }, [setupChecked, showSetup, historyPeriod, status?.account]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -229,10 +323,15 @@ export default function App() {
   }, [portfolioHistory])
 
   const portfolioChartLabels = useMemo(() => {
-    return portfolioHistory.map(s => 
-      new Date(s.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
-    )
-  }, [portfolioHistory])
+    return portfolioHistory.map(s => {
+      const d = new Date(s.timestamp)
+      if (historyPeriod === '1D') {
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+      } else {
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      }
+    })
+  }, [portfolioHistory, historyPeriod])
 
   // Normalize position price histories to % change for stacked comparison view
   const normalizedPositionSeries = useMemo(() => {
@@ -272,18 +371,18 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-hud-bg">
+    <div className="min-h-screen bg-hud-bg transition-colors duration-300">
       <div className="max-w-[1920px] mx-auto p-4">
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-hud-line">
           <div className="flex items-center gap-4 md:gap-6">
             <div className="flex items-baseline gap-2">
               <span className="text-xl md:text-2xl font-light tracking-tight text-hud-text-bright">
-                MAHORAGA
+                NIGHTWATCHER
               </span>
               <span className="hud-label">v2</span>
             </div>
-            <StatusIndicator 
-              status={isMarketOpen ? 'active' : 'inactive'} 
+            <StatusIndicator
+              status={isMarketOpen ? 'active' : 'inactive'}
               label={isMarketOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
               pulse={isMarketOpen}
             />
@@ -295,11 +394,18 @@ export default function App() {
                 { label: 'API CALLS', value: costs.calls.toString() },
               ]}
             />
-            <NotificationBell 
+            <NotificationBell
               overnightActivity={status?.overnightActivity}
               premarketPlan={status?.premarketPlan}
             />
-            <button 
+            <button
+              className="hud-label hover:text-hud-primary transition-colors flex items-center gap-1"
+              onClick={toggleTheme}
+              title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+            >
+              {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+            </button>
+            <button
               className="hud-label hover:text-hud-primary transition-colors"
               onClick={() => setShowSettings(true)}
             >
@@ -323,20 +429,20 @@ export default function App() {
                     <Metric label="BUYING POWER" value={formatCurrency(account.buying_power)} size="md" />
                   </div>
                   <div className="pt-2 border-t border-hud-line space-y-2">
-                    <Metric 
-                      label="TOTAL P&L" 
+                    <Metric
+                      label="TOTAL P&L"
                       value={`${formatCurrency(totalPl)} (${formatPercent(totalPlPct)})`}
                       size="md"
                       color={totalPl >= 0 ? 'success' : 'error'}
                     />
                     <div className="grid grid-cols-2 gap-2">
-                      <MetricInline 
-                        label="REALIZED" 
+                      <MetricInline
+                        label="REALIZED"
                         value={formatCurrency(realizedPl)}
                         color={realizedPl >= 0 ? 'success' : 'error'}
                       />
-                      <MetricInline 
-                        label="UNREALIZED" 
+                      <MetricInline
+                        label="UNREALIZED"
                         value={formatCurrency(unrealizedPl)}
                         color={unrealizedPl >= 0 ? 'success' : 'error'}
                       />
@@ -372,9 +478,9 @@ export default function App() {
                         const posEntry = status?.positionEntries?.[pos.symbol]
                         const staleness = status?.stalenessAnalysis?.[pos.symbol]
                         const holdTime = posEntry ? Math.floor((Date.now() - posEntry.entry_time) / 3600000) : null
-                        
+
                         return (
-                          <motion.tr 
+                          <motion.tr
                             key={pos.symbol}
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
@@ -391,8 +497,8 @@ export default function App() {
                                       { label: 'Current Price', value: formatCurrency(pos.current_price) },
                                       { label: 'Hold Time', value: holdTime !== null ? `${holdTime}h` : 'N/A' },
                                       { label: 'Entry Sentiment', value: posEntry ? `${(posEntry.entry_sentiment * 100).toFixed(0)}%` : 'N/A' },
-                                      ...(staleness ? [{ 
-                                        label: 'Staleness', 
+                                      ...(staleness ? [{
+                                        label: 'Staleness',
                                         value: `${(staleness.score * 100).toFixed(0)}%`,
                                         color: staleness.shouldExit ? 'text-hud-error' : 'text-hud-text'
                                       }] : []),
@@ -440,18 +546,34 @@ export default function App() {
                 <Metric label="API CALLS" value={costs.calls.toString()} size="lg" />
                 <MetricInline label="TOKENS IN" value={costs.tokens_in.toLocaleString()} />
                 <MetricInline label="TOKENS OUT" value={costs.tokens_out.toLocaleString()} />
-                <MetricInline 
-                  label="AVG COST/CALL" 
-                  value={costs.calls > 0 ? `$${(costs.total_usd / costs.calls).toFixed(6)}` : '$0'} 
+                <MetricInline
+                  label="AVG COST/CALL"
+                  value={costs.calls > 0 ? `$${(costs.total_usd / costs.calls).toFixed(6)}` : '$0'}
                 />
-                <MetricInline label="MODEL" value={config?.llm_model || 'gpt-4o-mini'} />
+                <MetricInline label="MODEL" value={config?.llm_model || 'gemini-2.0-flash'} />
               </div>
             </Panel>
           </div>
 
           {/* Row 2: Portfolio Performance Chart */}
           <div className="col-span-4 md:col-span-8 lg:col-span-8">
-            <Panel title="PORTFOLIO PERFORMANCE" titleRight="24H" className="h-[320px]">
+            <Panel 
+              title="PORTFOLIO PERFORMANCE" 
+              titleRight={
+                <div className="flex gap-2">
+                  {(['1D', '1W', '1M'] as const).map(p => (
+                    <button
+                      key={p}
+                      onClick={() => setHistoryPeriod(p)}
+                      className={clsx('hud-label hover:text-hud-primary transition-colors', historyPeriod === p ? 'text-hud-primary' : 'text-hud-text-dim')}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              } 
+              className="h-[320px]"
+            >
               {portfolioChartData.length > 1 ? (
                 <div className="h-full w-full">
                   <LineChart
@@ -487,8 +609,8 @@ export default function App() {
                       const color = positionColors[idx % positionColors.length]
                       return (
                         <div key={pos.symbol} className="flex items-center gap-1.5">
-                          <div 
-                            className="w-2 h-2 rounded-full" 
+                          <div
+                            className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: `var(--color-hud-${color})` }}
                           />
                           <span className="hud-value-sm">{pos.symbol}</span>
@@ -547,7 +669,7 @@ export default function App() {
                         />
                       }
                     >
-                      <motion.div 
+                      <motion.div
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: i * 0.02 }}
@@ -588,7 +710,7 @@ export default function App() {
                   <div className="text-hud-text-dim py-4 text-center">Waiting for activity...</div>
                 ) : (
                   logs.slice(-50).map((log: LogEntry, i: number) => (
-                    <motion.div 
+                    <motion.div
                       key={`${log.timestamp}-${i}`}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
@@ -668,7 +790,7 @@ export default function App() {
                         </div>
                       }
                     >
-                      <motion.div 
+                      <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         className="p-2 border border-hud-line/30 rounded hover:border-hud-line/60 cursor-help transition-colors"
@@ -712,9 +834,9 @@ export default function App() {
                 <MetricInline label="TAKE PROFIT" value={`${config.take_profit_pct}%`} />
                 <MetricInline label="STOP LOSS" value={`${config.stop_loss_pct}%`} />
                 <span className="hidden lg:inline text-hud-line">|</span>
-                <MetricInline 
-                  label="OPTIONS" 
-                  value={config.options_enabled ? 'ON' : 'OFF'} 
+                <MetricInline
+                  label="OPTIONS"
+                  value={config.options_enabled ? 'ON' : 'OFF'}
                   valueClassName={config.options_enabled ? 'text-hud-purple' : 'text-hud-text-dim'}
                 />
                 {config.options_enabled && (
@@ -724,9 +846,9 @@ export default function App() {
                   </>
                 )}
                 <span className="hidden lg:inline text-hud-line">|</span>
-                <MetricInline 
-                  label="CRYPTO" 
-                  value={config.crypto_enabled ? '24/7' : 'OFF'} 
+                <MetricInline
+                  label="CRYPTO"
+                  value={config.crypto_enabled ? '24/7' : 'OFF'}
                   valueClassName={config.crypto_enabled ? 'text-hud-warning' : 'text-hud-text-dim'}
                 />
                 {config.crypto_enabled && (
@@ -749,10 +871,10 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <SettingsModal 
-              config={config} 
-              onSave={handleSaveConfig} 
-              onClose={() => setShowSettings(false)} 
+            <SettingsModal
+              config={config}
+              onSave={handleSaveConfig}
+              onClose={() => setShowSettings(false)}
             />
           </motion.div>
         )}

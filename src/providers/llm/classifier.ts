@@ -180,3 +180,72 @@ export async function summarizeLearnedRules(
 
   return result.content;
 }
+
+const TRADING_DECISION_PROMPT = `You are a senior algorithmic trader. Analyze the provided data and make a structured trading decision.
+
+Input Data:
+- Symbol
+- Current Price
+- Technical Indicators (RSI, MACD, etc.)
+- Recent News/Events (if any)
+
+Your Goal:
+Determine if we should BUY, SELL, or HOLD. 
+
+Rules:
+1. BUY only if strong bullish signals (e.g. RSI oversold + bullish divergence, break of resistance, positive catalyst).
+2. SELL only if strong bearish signals or to take profit/stop loss.
+3. HOLD if uncertain or neutral.
+4. Confidence score (0.0-1.0) must reflect the strength of conviction. High confidence (>0.8) requires multiple converging factors.
+
+Respond ONLY with valid JSON.`;
+
+export async function generateTradingDecision(
+  llm: LLMProvider,
+  symbol: string,
+  price: number,
+  technicals: any,
+  news: any[]
+): Promise<{
+  verdict: "BUY" | "SELL" | "HOLD";
+  confidence: number;
+  reasoning: string;
+}> {
+  const context = {
+    symbol,
+    price,
+    technicals,
+    recent_news: news.map(n => n.headline || n.summary).slice(0, 3)
+  };
+
+  const result = await llm.complete({
+    messages: [
+      {
+        role: "system",
+        content: TRADING_DECISION_PROMPT,
+      },
+      {
+        role: "user",
+        content: JSON.stringify(context, null, 2),
+      },
+    ],
+    temperature: 0.2, // Low temperature for consistent decisions
+    max_tokens: 500,
+    response_format: { type: "json_object" },
+  });
+
+  try {
+    const parsed = JSON.parse(result.content);
+    return {
+      verdict: ["BUY", "SELL", "HOLD"].includes(parsed.verdict) ? parsed.verdict : "HOLD",
+      confidence: Number(parsed.confidence) || 0,
+      reasoning: parsed.reasoning || "No reasoning provided"
+    };
+  } catch (e) {
+    return {
+      verdict: "HOLD",
+      confidence: 0,
+      reasoning: "Failed to parse LLM response"
+    };
+  }
+}

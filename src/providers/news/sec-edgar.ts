@@ -33,7 +33,7 @@ export class SECEdgarProvider implements NewsProvider {
         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom",
         {
           headers: {
-            "User-Agent": "Mahoraga Trading Bot (contact@example.com)",
+            "User-Agent": "Nightwatcher Trading Bot (contact@example.com)",
             Accept: "application/atom+xml",
           },
         }
@@ -83,7 +83,7 @@ export class SECEdgarProvider implements NewsProvider {
         `https://data.sec.gov/submissions/CIK${cik.padStart(10, "0")}.json`,
         {
           headers: {
-            "User-Agent": "Mahoraga Trading Bot (contact@example.com)",
+            "User-Agent": "Nightwatcher Trading Bot (contact@example.com)",
             Accept: "application/json",
           },
         }
@@ -175,7 +175,7 @@ export class SECEdgarProvider implements NewsProvider {
         "https://www.sec.gov/files/company_tickers.json",
         {
           headers: {
-            "User-Agent": "Mahoraga Trading Bot (contact@example.com)",
+            "User-Agent": "Nightwatcher Trading Bot (contact@example.com)",
           },
         }
       );

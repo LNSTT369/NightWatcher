@@ -8,6 +8,7 @@ import type {
   MarketClock,
   MarketDay,
   BrokerProvider,
+  PortfolioHistory,
 } from "../types";
 
 interface AlpacaAccount {
@@ -265,6 +266,15 @@ export class AlpacaTradingProvider implements BrokerProvider {
       close: day.close,
       settlement_date: day.settlement_date,
     }));
+  }
+
+  async getPortfolioHistory(period?: string, timeframe?: string): Promise<PortfolioHistory> {
+    const params = new URLSearchParams();
+    if (period) params.set("period", period);
+    if (timeframe) params.set("timeframe", timeframe);
+    const qs = params.toString();
+    const endpoint = qs ? `/v2/account/portfolio/history?${qs}` : "/v2/account/portfolio/history";
+    return this.client.tradingRequest<PortfolioHistory>("GET", endpoint);
   }
 }
 
