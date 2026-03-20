@@ -3,27 +3,24 @@
 
 
 
-# NIGHTWATCHER
+# NIGHTWATCHER V2
 
-An autonomous, LLM-powered trading agent that adapts to social sentiment and makes trading decisions using AI.
+An autonomous, multi-agent AI trading system that marries the speed of algorithmic execution with the hyper-logical intuition of a fundamental analyst. 
 
-[![Discord](https://img.shields.io/discord/1467592472158015553?color=7289da&label=Discord&logo=discord&logoColor=white)](https://discord.gg/Ys8KpsW5NN)
-
-NIGHTWATCHER scrapes StockTwits for trending stocks, uses OpenAI to analyze signals and research opportunities, then executes trades through Alpaca. It's designed as a starting point for building your own agentic trading strategies.
+Nightwatcher actively reasons about *why* the market is moving before deploying capital. It pulls trending signals from StockTwits, validates them against real-time fundamental news using an LLM Catalyst Filter to drop retail noise, and autonomously executes high-conviction trades 24/7 through Alpaca.
 
 <img width="1278" height="957" alt="dashboard" src="https://github.com/user-attachments/assets/56473ab6-e2c6-45fc-9e32-cf85e69f1a2d" />
 
 
 ## Features
 
-- **LLM-Powered Analysis** - OpenAI evaluates signals and decides what to buy/sell
-- **24/7 Sentiment Monitoring** - Scrapes StockTwits trending stocks
-- **Position Research** - AI continuously evaluates held positions
-- **Automatic Risk Management** - Stop-loss, take-profit, position limits, kill switch
-- **Real-Time Dashboard** - Monitor positions, signals, research, and costs
-- **Paper Trading Mode** - Test safely before going live
-- **MCP Server Architecture** - Extensible tool-based design
-- **Cost Tracking** - Monitor your OpenAI spend in real-time
+- **The "Brain" (LLM Catalyst Validator)** — Automatically drops lagging "retail noise" by confirming hard fundamental catalysts (e.g., earnings) in real-time.
+- **The "Eyes" (24/7 Sentinel)** — Scrapes StockTwits for extreme volume spikes and crypto momentum while you sleep.
+- **The "Hands" (Institutional Execution)** — Zero-latency programmatic market orders executed natively on the Alpaca API.
+- **Unified Trading Pipelines** — Seamlessly pivots between equities during market hours and crypto (`BTC`, `ETH`, `SOL`) overnight.
+- **Glassmorphic V2 Dashboard** — Apple-tier visualization of active signals, real-time portfolio performance, and live agent activity streams.
+- **Overnight Activity Monitor** — Aggregates overnight metrics natively so you can see exactly how many signals the agent gathered and researched while away.
+- **Programmatic Risk Management** — Hard-coded max position sizing, daily loss guardrails, and automated take-profit rules.
 
 ## Requirements
 
