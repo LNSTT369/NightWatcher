@@ -9,7 +9,7 @@ An autonomous, multi-agent AI trading system that marries the speed of algorithm
 
 Nightwatcher actively reasons about *why* the market is moving before deploying capital. It pulls trending signals from StockTwits, validates them against real-time fundamental news using an LLM Catalyst Filter to drop retail noise, and autonomously executes high-conviction trades 24/7 through Alpaca.
 
-<img width="1278" height="957" alt="dashboard" src="https://github.com/user-attachments/assets/56473ab6-e2c6-45fc-9e32-cf85e69f1a2d" />
+<img width="1278" height="957" alt="dashboard" src="assets/NightWatcher Screenshot.jpg" />
 
 
 ## Features

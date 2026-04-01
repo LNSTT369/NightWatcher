@@ -69,7 +69,8 @@ const DEFAULT_CONFIG = {
 
   // Trading parameters
   max_position_value: 2000,            // Max $ per position
-  max_positions: 3,                    // Max concurrent positions
+  max_positions: 3,                    // Max concurrent positions (crypto)
+  max_stock_positions: 3,              // Max concurrent stock positions
   min_sentiment_score: 0.4,            // Minimum bullish sentiment to buy
   min_volume: 10,                      // Minimum message volume
 
@@ -299,7 +300,7 @@ class StockTwitsAgent {
           score = 5;
         }
 
-        if (isCatalyst && score >= 7) {
+        if (isCatalyst && score >= 5) {
           enhancedReason += ` | LLM: CATALYST (Score: ${score})`;
           signals.push({
             symbol: sym.symbol,
@@ -684,7 +685,7 @@ class SimpleOrchestrator {
     const cryptoSignals = this.signalCache.filter(s => s.isCrypto);
 
     // Process stock signals (only if market open and not crypto-only mode)
-    if (!cryptoOnly && marketOpen && stockPositions.length < this.config.max_positions) {
+    if (!cryptoOnly && marketOpen && stockPositions.length < (this.config.max_stock_positions ?? this.config.max_positions)) {
       const stockCandidates = stockSignals
         .filter(s => !heldSymbols.has(s.symbol))
         .filter(s => s.sentiment >= this.config.min_sentiment_score)
@@ -694,7 +695,7 @@ class SimpleOrchestrator {
       this.logger.log("System", "stock_buy_candidates", { count: stockCandidates.length });
 
       for (const signal of stockCandidates.slice(0, 3)) {
-        if (stockPositions.length >= this.config.max_positions) break;
+        if (stockPositions.length >= (this.config.max_stock_positions ?? this.config.max_positions)) break;
 
         const confidence = Math.min(1, Math.max(0.5, signal.sentiment + 0.3));
 
