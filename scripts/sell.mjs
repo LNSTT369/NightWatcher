@@ -112,11 +112,12 @@ async function main() {
 
             console.log(`\n--- Step 1: Preview Sell Order for ${qty ? qty + " shares" : "$" + currentNotional} of ${symbol} ---`);
 
+            const isCrypto = symbol.includes('/');
             const orderArgs = {
                 symbol,
                 side: "sell",
                 order_type: "market",
-                time_in_force: "gtc"
+                time_in_force: isCrypto ? "gtc" : "day" // Alpaca: notional stock orders must be DAY
             };
 
             if (qty) {

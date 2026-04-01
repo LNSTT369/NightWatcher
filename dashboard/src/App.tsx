@@ -379,7 +379,6 @@ export default function App() {
               <span className="text-xl md:text-2xl font-light tracking-tight text-hud-text-bright">
                 NIGHTWATCHER
               </span>
-              <span className="hud-label">v2</span>
             </div>
             <StatusIndicator
               status={isMarketOpen ? 'active' : 'inactive'}
@@ -550,7 +549,16 @@ export default function App() {
                   label="AVG COST/CALL"
                   value={costs.calls > 0 ? `$${(costs.total_usd / costs.calls).toFixed(6)}` : '$0'}
                 />
-                <MetricInline label="MODEL" value={config?.llm_model || 'gemini-2.0-flash'} />
+                <MetricInline label="MODEL" value={config?.llm_model || 'gpt-oss:20b'} />
+                <MetricInline
+                  label="PROVIDER"
+                  value={(config?.llm_provider || 'ollama').toUpperCase()}
+                  valueClassName={
+                    config?.llm_provider === 'openai' ? 'text-hud-success' :
+                    config?.llm_provider === 'gemini' ? 'text-hud-purple' :
+                    'text-hud-cyan'
+                  }
+                />
               </div>
             </Panel>
           </div>

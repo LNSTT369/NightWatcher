@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Nightwatcher v1 - Simple Trading Agent
+ * NIGHTWATCHER - Simple Trading Agent
  * 
  * COPY THIS FILE and modify it for your own strategy.
  * 
@@ -57,8 +57,8 @@ loadEnvFile();
 // Configuration
 // ============================================================================
 
-const CONFIG_PATH = path.join(process.cwd(), "agent-config.json");
-const LOG_PATH = path.join(process.cwd(), "agent-logs.json");
+const CONFIG_PATH = path.join(process.cwd(), "nightwatcher-config.json");
+const LOG_PATH = path.join(process.cwd(), "nightwatcher-logs.json");
 
 const DEFAULT_CONFIG = {
   mcp_url: process.env.MCP_URL || "http://localhost:8787/mcp",
@@ -71,7 +71,7 @@ const DEFAULT_CONFIG = {
   max_position_value: 2000,            // Max $ per position
   max_positions: 3,                    // Max concurrent positions (crypto)
   max_stock_positions: 3,              // Max concurrent stock positions
-  min_sentiment_score: 0.4,            // Minimum bullish sentiment to buy
+  min_sentiment_score: 0.25,           // Minimum bullish sentiment to buy (0-1, roughly % bullish - 50%)
   min_volume: 10,                      // Minimum message volume
 
   // Risk management
@@ -270,38 +270,16 @@ class StockTwitsAgent {
         let score = 0;
         let enhancedReason = `StockTwits: ${sentiment.bullish}B/${sentiment.bearish}b (${(sentiment.score * 100).toFixed(0)}%)`;
 
-        try {
-          if (this.mcp) {
-            this.logger.increment("signalsResearched");
-            this.logger.log(this.name, "llm_validating", { symbol: sym.symbol });
-            const research = await this.callTool("symbol-research", { symbol: sym.symbol });
-            
-            if (research.ok && research.data) {
-              const context = typeof research.data.report === 'string' ? research.data.report : JSON.stringify(research.data);
-              const prompt = `Analyze this data regarding ${sym.symbol}: ${context.substring(0, 8000)}. Is this stock trending because of a Hard Fundamental Catalyst (e.g., earnings blowout, FDA approval, buyout rumor, new product launch) or is it just Retail Hype/Noise (e.g., meme stock pumping, influencer tweet)? Reply EXACTLY in this format: "CATALYST" or "NOISE" | "Confidence: 1-10"`;
-              
-              const llmRes = await this.callTool("llm-prompt", { prompt });
-              if (llmRes.ok) {
-                const reply = llmRes.data || "";
-                isCatalyst = reply.toUpperCase().includes("CATALYST");
-                const match = reply.match(/Confidence:\s*(\d+)/i) || reply.match(/(\d+)/);
-                if (match) {
-                  score = parseInt(match[1], 10);
-                }
-              }
-            }
-          } else {
-            isCatalyst = true;
-            score = 8;
-          }
-        } catch (e) {
-          this.logger.log(this.name, "llm_filter_error", { symbol: sym.symbol, error: e.message });
-          isCatalyst = true;
-          score = 5;
-        }
+        // Quality score based purely on sentiment data (no LLM gate — llm-prompt is not in MCP)
+        // Score 0-10 based on: % bullish, message volume, and net sentiment
+        const bullishRatio = sentiment.bullish / Math.max(sentiment.total, 1);
+        const volumeBonus = Math.min(sentiment.total / 50, 1); // max bonus at 50+ messages
+        score = Math.round((bullishRatio * 6 + sentiment.score * 3 + volumeBonus) * 1.1);
+        score = Math.max(0, Math.min(10, score));
+        isCatalyst = score >= 4; // Lower threshold than before
 
-        if (isCatalyst && score >= 5) {
-          enhancedReason += ` | LLM: CATALYST (Score: ${score})`;
+        if (isCatalyst) {
+          enhancedReason += ` | Quality score: ${score}/10`;
           signals.push({
             symbol: sym.symbol,
             source: "stocktwits",
@@ -311,8 +289,15 @@ class StockTwitsAgent {
             bearish: sentiment.bearish,
             reason: enhancedReason,
           });
+          this.logger.log(this.name, "signal_accepted", { symbol: sym.symbol, score, sentiment: sentiment.score.toFixed(2), volume: sentiment.total });
         } else {
-          this.logger.log(this.name, "filtered_noise", { symbol: sym.symbol, score, reason: "LLM classified as NOISE or low confidence" });
+          this.logger.log(this.name, "filtered_noise", { 
+            symbol: sym.symbol, 
+            score, 
+            bullish: sentiment.bullish, 
+            total: sentiment.total,
+            reason: `Score ${score} < 4` 
+          });
         }
       }
       await sleep(300);
@@ -556,7 +541,7 @@ class SimpleOrchestrator {
 
     try {
       const transport = new SSEClientTransport(new URL(url));
-      this.mcp = new Client({ name: "nightwatcher-v1", version: "1.0" }, { capabilities: {} });
+      this.mcp = new Client({ name: "nightwatcher", version: "1.0" }, { capabilities: {} });
       await this.mcp.connect(transport);
       this.executor = new TradingExecutor(this.mcp, this.logger, this.config);
       this.crypto = new CryptoAgent(this.logger, this.config, this.mcp);
@@ -776,7 +761,7 @@ class SimpleOrchestrator {
 
   async run() {
     console.log("\n========================================");
-    console.log("  NIGHTWATCHER v1 - Simple Trading Agent");
+    console.log("  NIGHTWATCHER - Simple Trading Agent");
     console.log("========================================\n");
 
     if (!(await this.connect())) {
@@ -843,7 +828,7 @@ class SimpleOrchestrator {
       costs: this.logger.getCosts(),
       lastAnalystRun: this.lastAnalystRun,
       overnightActivity: this.logger.stats,
-      // v1 doesn't have advanced features
+      // NIGHTWATCHER doesn't have advanced features
       signalResearch: {},
       positionResearch: {},
       stalenessAnalysis: {},

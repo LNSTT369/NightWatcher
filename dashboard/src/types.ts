@@ -64,6 +64,7 @@ export interface Config {
   position_size_pct_of_cash: number
   llm_model: string
   llm_analyst_model?: string
+  llm_provider?: 'openai' | 'gemini' | 'ollama'
   llm_max_tokens: number
   starting_equity?: number
   

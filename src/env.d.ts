@@ -8,8 +8,12 @@ export interface Env {
   ALPACA_API_SECRET: string;
   ALPACA_PAPER?: string;
   OPENAI_API_KEY?: string;
-  TWITTER_BEARER_TOKEN?: string;
   GEMINI_API_KEY?: string;
+  OLLAMA_API_KEY?: string;     // Hosted Ollama API key (optional for local)
+  OLLAMA_BASE_URL?: string;    // Defaults to https://api.ollama.ai/v1 (or http://localhost:11434/v1 for local)
+  OLLAMA_MODEL?: string;       // Model name, e.g. "gpt-oss:20b", "llama3.2"
+  LLM_PROVIDER?: string;       // "openai" | "gemini" | "ollama" — explicit provider selection
+  TWITTER_BEARER_TOKEN?: string;
   KILL_SWITCH_SECRET: string;
 
   ENVIRONMENT: string;

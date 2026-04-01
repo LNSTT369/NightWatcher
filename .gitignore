@@ -13,6 +13,8 @@
 # Agent runtime files (contain personal trading data)
 agent-config.json
 agent-logs.json
+nightwatcher-config.json
+nightwatcher-logs.json
 position-tracker.json
 trade-journal.json
 

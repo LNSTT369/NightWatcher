@@ -39,6 +39,9 @@ async function main() {
 
         console.log(`\n--- Step 1: Preview Order for $${notional} of ${symbol} ---`);
 
+    const isCrypto = symbol.includes('/');
+    const timeInForce = isCrypto ? "gtc" : "day"; // Alpaca: notional stock orders must be DAY
+
         // 1. Preview the order to get an approval token
         const previewResult = await client.callTool({
             name: "orders-preview",
@@ -47,7 +50,7 @@ async function main() {
                 side: "buy",
                 notional,
                 order_type: "market",
-                time_in_force: "gtc"
+                time_in_force: timeInForce
             }
         });
 

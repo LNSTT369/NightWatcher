@@ -169,31 +169,104 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
           <div>
             <h3 className="hud-label mb-3 text-hud-primary">LLM Configuration</h3>
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="hud-label block mb-1">Research Model (cheap)</label>
+              <div className="col-span-2">
+                <label className="hud-label block mb-1">Provider</label>
                 <select
                   className="hud-input w-full"
-                  value={localConfig.llm_model}
-                  onChange={e => handleChange('llm_model', e.target.value)}
+                  value={localConfig.llm_provider || 'ollama'}
+                  onChange={e => handleChange('llm_provider', e.target.value)}
                 >
-                  <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                  <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="ollama">🦙 Ollama (Local)</option>
+                  <option value="gemini">✦ Google Gemini</option>
+                  <option value="openai">⬡ OpenAI</option>
                 </select>
+                <p className="text-[9px] text-hud-text-dim mt-1">
+                  {localConfig.llm_provider === 'ollama' && 'Uses local Ollama at OLLAMA_BASE_URL. No API cost.'}
+                  {localConfig.llm_provider === 'gemini' && 'Requires GEMINI_API_KEY in .dev.vars'}
+                  {(!localConfig.llm_provider || localConfig.llm_provider === 'openai') && 'Requires OPENAI_API_KEY in .dev.vars'}
+                </p>
               </div>
-              <div>
-                <label className="hud-label block mb-1">Analyst Model (smart)</label>
-                <select
-                  className="hud-input w-full"
-                  value={localConfig.llm_analyst_model || 'gemini-2.0-flash'}
-                  onChange={e => handleChange('llm_analyst_model', e.target.value)}
-                >
-                  <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                  <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-                  <option value="gpt-4o">gpt-4o</option>
-                  <option value="gpt-5.2-2025-12-11">GPT-5.2 (best)</option>
-                </select>
-              </div>
+
+              {/* Model pickers — vary by provider */}
+              {(localConfig.llm_provider === 'ollama') ? (
+                <>
+                  <div>
+                    <label className="hud-label block mb-1">Research Model</label>
+                    <input
+                      type="text"
+                      className="hud-input w-full"
+                      value={localConfig.llm_model}
+                      onChange={e => handleChange('llm_model', e.target.value)}
+                      placeholder="gpt-oss:20b"
+                    />
+                    <p className="text-[9px] text-hud-text-dim mt-1">Must match a model in `ollama list`</p>
+                  </div>
+                  <div>
+                    <label className="hud-label block mb-1">Analyst Model</label>
+                    <input
+                      type="text"
+                      className="hud-input w-full"
+                      value={localConfig.llm_analyst_model || ''}
+                      onChange={e => handleChange('llm_analyst_model', e.target.value)}
+                      placeholder="gpt-oss:20b"
+                    />
+                  </div>
+                </>
+              ) : (localConfig.llm_provider === 'gemini') ? (
+                <>
+                  <div>
+                    <label className="hud-label block mb-1">Research Model (cheap)</label>
+                    <select
+                      className="hud-input w-full"
+                      value={localConfig.llm_model}
+                      onChange={e => handleChange('llm_model', e.target.value)}
+                    >
+                      <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                      <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                      <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="hud-label block mb-1">Analyst Model (smart)</label>
+                    <select
+                      className="hud-input w-full"
+                      value={localConfig.llm_analyst_model || 'gemini-2.0-flash'}
+                      onChange={e => handleChange('llm_analyst_model', e.target.value)}
+                    >
+                      <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                      <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                      <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro</option>
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="hud-label block mb-1">Research Model (cheap)</label>
+                    <select
+                      className="hud-input w-full"
+                      value={localConfig.llm_model}
+                      onChange={e => handleChange('llm_model', e.target.value)}
+                    >
+                      <option value="gpt-4o-mini">gpt-4o-mini</option>
+                      <option value="gpt-4o">gpt-4o</option>
+                      <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="hud-label block mb-1">Analyst Model (smart)</label>
+                    <select
+                      className="hud-input w-full"
+                      value={localConfig.llm_analyst_model || 'gpt-4o'}
+                      onChange={e => handleChange('llm_analyst_model', e.target.value)}
+                    >
+                      <option value="gpt-4o">gpt-4o</option>
+                      <option value="gpt-4o-mini">gpt-4o-mini</option>
+                      <option value="o3-mini">o3-mini</option>
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

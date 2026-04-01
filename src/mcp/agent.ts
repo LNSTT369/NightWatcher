@@ -35,6 +35,7 @@ import { computeTechnicals, detectSignals, type TechnicalIndicators, type Signal
 import { scrapeUrl, extractFinancialData, isAllowedDomain } from "../providers/scraper";
 import { createOpenAIProvider } from "../providers/llm/openai";
 import { createGeminiProvider } from "../providers/llm/gemini";
+import { createOllamaProvider } from "../providers/llm/ollama";
 import { classifyEvent, generateResearchReport, summarizeLearnedRules, generateTradingDecision } from "../providers/llm/classifier";
 import { getDTE } from "../providers/alpaca/options";
 import type { LLMProvider, OptionsProvider } from "../providers/types";
@@ -62,10 +63,33 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     const storedPolicy = await getPolicyConfig(db);
     this.policyConfig = storedPolicy ?? getDefaultPolicyConfig(this.env);
 
-    if (this.env.OPENAI_API_KEY && this.env.FEATURE_LLM_RESEARCH === "true") {
-      this.llm = createOpenAIProvider({ apiKey: this.env.OPENAI_API_KEY });
-    } else if (this.env.GEMINI_API_KEY && this.env.FEATURE_LLM_RESEARCH === "true") {
-      this.llm = createGeminiProvider({ apiKey: this.env.GEMINI_API_KEY });
+    if (this.env.FEATURE_LLM_RESEARCH === "true") {
+      const provider = this.env.LLM_PROVIDER?.toLowerCase();
+
+      if (provider === "ollama") {
+        this.llm = createOllamaProvider({
+          apiKey: this.env.OLLAMA_API_KEY,
+          baseUrl: this.env.OLLAMA_BASE_URL,
+          model: this.env.OLLAMA_MODEL,
+        });
+      } else if (provider === "gemini" && this.env.GEMINI_API_KEY) {
+        this.llm = createGeminiProvider({ apiKey: this.env.GEMINI_API_KEY });
+      } else if (provider === "openai" && this.env.OPENAI_API_KEY) {
+        this.llm = createOpenAIProvider({ apiKey: this.env.OPENAI_API_KEY });
+      } else if (!provider) {
+        // Backwards-compat: auto-detect from available keys (OpenAI takes priority)
+        if (this.env.OPENAI_API_KEY) {
+          this.llm = createOpenAIProvider({ apiKey: this.env.OPENAI_API_KEY });
+        } else if (this.env.GEMINI_API_KEY) {
+          this.llm = createGeminiProvider({ apiKey: this.env.GEMINI_API_KEY });
+        } else if (this.env.OLLAMA_API_KEY) {
+          this.llm = createOllamaProvider({
+            apiKey: this.env.OLLAMA_API_KEY,
+            model: this.env.OLLAMA_MODEL,
+          });
+        }
+      }
+      // If LLM_PROVIDER is set but the corresponding key is missing, llm remains null
     }
 
     this.options = alpaca.options;

@@ -3,7 +3,7 @@
 
 
 
-# NIGHTWATCHER V2
+# NIGHTWATCHER
 
 An autonomous, multi-agent AI trading system that marries the speed of algorithmic execution with the hyper-logical intuition of a fundamental analyst. 
 
@@ -18,7 +18,7 @@ Nightwatcher actively reasons about *why* the market is moving before deploying 
 - **The "Eyes" (24/7 Sentinel)** — Scrapes StockTwits for extreme volume spikes and crypto momentum while you sleep.
 - **The "Hands" (Institutional Execution)** — Zero-latency programmatic market orders executed natively on the Alpaca API.
 - **Unified Trading Pipelines** — Seamlessly pivots between equities during market hours and crypto (`BTC`, `ETH`, `SOL`) overnight.
-- **Glassmorphic V2 Dashboard** — Apple-tier visualization of active signals, real-time portfolio performance, and live agent activity streams.
+- **Glassmorphic Dashboard** — Apple-tier visualization of active signals, real-time portfolio performance, and live agent activity streams.
 - **Overnight Activity Monitor** — Aggregates overnight metrics natively so you can see exactly how many signals the agent gathered and researched while away.
 - **Programmatic Risk Management** — Hard-coded max position sizing, daily loss guardrails, and automated take-profit rules.
 
@@ -72,7 +72,7 @@ The server runs at `http://localhost:8787`
 In a new terminal:
 
 ```bash
-node agent-v1.mjs
+node agent.mjs
 ```
 
 ### 6. Start the dashboard (optional)
@@ -110,7 +110,7 @@ The agent uses OpenAI for signal analysis and position management:
 
 ## Configuration
 
-Edit `agent-config.json` (created on first run) or use the dashboard:
+Edit `nightwatcher-config.json` (created on first run) or use the dashboard:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -130,7 +130,7 @@ Edit `agent-config.json` (created on first run) or use the dashboard:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         AGENT (agent-v1.mjs)                    │
+│                         AGENT (agent.mjs)                    │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────┐     ┌─────────────────────────────────┐    │
 │  │   StockTwits    │     │       LLM Analysis (OpenAI)     │    │
@@ -225,10 +225,10 @@ The dashboard shows real-time LLM cost tracking.
 
 ```
 nightwatcher/
-├── agent-v1.mjs              # Trading agent - COPY AND MODIFY THIS
+├── agent.mjs              # Trading agent - COPY AND MODIFY THIS
 ├── .dev.vars                 # API keys (DO NOT COMMIT)
-├── agent-config.json         # Runtime config (DO NOT COMMIT)
-├── agent-logs.json           # Activity logs (DO NOT COMMIT)
+├── nightwatcher-config.json         # Runtime config (DO NOT COMMIT)
+├── nightwatcher-logs.json           # Activity logs (DO NOT COMMIT)
 ├── wrangler.toml             # Cloudflare Workers config
 ├── package.json
 │
@@ -281,7 +281,7 @@ The agent only trades during market hours (9:30 AM - 4:00 PM ET, Mon-Fri). It ga
 2. Check `min_sentiment_score` - might be too high (try 0.2)
 3. Check `max_positions` - might already be at limit
 4. Check research results in dashboard - see what the LLM is thinking
-5. Check logs in dashboard or `agent-logs.json`
+5. Check logs in dashboard or `nightwatcher-logs.json`
 
 ### High OpenAI costs
 
@@ -291,7 +291,7 @@ The agent only trades during market hours (9:30 AM - 4:00 PM ET, Mon-Fri). It ga
 
 ## Extending the Agent
 
-**Copy `agent-v1.mjs` and modify it.** The file has clearly marked sections:
+**Copy `agent.mjs` and modify it.** The file has clearly marked sections:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
