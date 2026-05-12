@@ -1,7 +1,7 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
 **Date:** 2026-05-12
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Phase 4a + Strategy System — Complete
+**Session type:** Dashboard Wiring + Crash Fix — Complete
 
 ---
 
@@ -10,48 +10,85 @@
 Branch:  NIGHTWATCHER-V3
 Remote:  pushed ✓
 Status:  clean
-Latest:  9a70106 feat(strategies): strategy folder system + Momentum Breakout + ORB
+Latest:  c9fef0b fix(dashboard): blank screen crash from missing regime_tags
 ```
 
 ---
 
-## Live Processes (running now)
-```bash
-# Dev server
-npm run dev  → PID ~50194 (port 8787)
+## What Was Built This Session
 
-# Strategy runners — both scheduled for market open today (2026-05-12)
-node scripts/run.mjs momentum-breakout  → /tmp/nw-momentum.log
-node scripts/run.mjs orb               → /tmp/nw-orb.log
+### 1. `scripts/dashboard-api.mjs` (new)
+HTTP server on **port 3001** — the bridge between the React dashboard and MCP.
+
+| Endpoint | MCP tool(s) called |
+|---|---|
+| `GET /api/setup/status` | `auth-verify` |
+| `GET /api/status` | `portfolio-get` + `market-clock` + `signal-list` |
+| `GET /api/portfolio/history` | `portfolio-history` |
+| `GET /api/v3/regime` | `regime-detect` |
+| `GET /api/v3/risk` | `risk-kelly-size` + `risk-sharpe` + `risk-var` |
+| `GET /api/v3/signals` | `signal-list` (normalized to full AlphaSignal shape) |
+| `POST /api/config` | in-memory save |
+
+Key design:
+- Persistent MCP SSE connection with auto-reconnect on ECONNREFUSED
+- Gracefully returns nulls when MCP is not yet reachable
+- Normalizes `signal-list` output to the `AlphaSignal` shape the dashboard expects
+
+### 2. `scripts/run.mjs` (updated)
+Every `state.log(tag, msg, data)` call now appends a structured JSON line to `logs/<strategy>-activity.jsonl`. The dashboard-api reads these files for the ACTIVITY FEED panel.
+
+### 3. `start.sh` (updated)
+Now a 4-step launch:
 ```
+[1/4] npm run dev        → MCP server (port 8787) + health-check wait
+[2/4] dashboard-api.mjs  → Dashboard bridge (port 3001)
+[3/4] strategy runners   → momentum-breakout + orb
+[4/4] tail -f logs/      → unified log stream
+```
+
+### 4. Dashboard crash fix (App.tsx + dashboard-api.mjs)
+**Root cause:** `signal-list` MCP tool returns a minimal DB row (`id`, `source`, `symbol`, `direction`, `confidence`, `urgency`, `status`, `created_at`) — NOT the full `AlphaSignal` shape. The Alpha Signals panel did `sig.regime_tags.length` on an undefined field → `TypeError` → React tree crash → blank black screen.
+
+**Fix applied in two places:**
+- `dashboard-api.mjs` `handleV3Signals`: maps every signal to full `AlphaSignal` shape, patching `signal_id`, `generated_at`, `ttl_seconds`, `horizon`, `rationale`, `regime_tags: []`
+- `App.tsx` line ~754: changed `sig.regime_tags.length > 0` → `(sig.regime_tags?.length ?? 0) > 0` as a defensive guard
+
+---
+
+## Full Stack Startup
+
+```bash
+# Terminal 1 — everything backend
+./start.sh
+
+# Terminal 2 — dashboard UI
+cd dashboard && npm run dev
+```
+
+| Service | URL |
+|---|---|
+| MCP server (wrangler) | http://localhost:8787 |
+| Dashboard API bridge | http://localhost:3001 |
+| Dashboard UI (Vite) | http://localhost:3000 |
+
 Paper account: **PA3NCNZJLERG**
 
 ---
 
 ## Completed Phases
 
-### Phase 0 ✅ Foundation
-### Phase 2 ✅ Regime Detection
-### Phase 3 ✅ Quant Risk (Kelly, Sharpe, VaR, Correlation)
-### Phase 4a ✅ Smart Execution (TWAP, VWAP, SOR, Slippage)
-
-### Strategy System ✅ (this session)
-
-**Structure:**
-```
-strategies/
-  momentum-breakout/    — RSI 40–65 + MACD + above 20-SMA + regime filter
-    index.mjs
-    config.json
-  orb/                  — Opening Range Breakout (1h range + VWAP + 1:2 R:R)
-    index.mjs
-    config.json
-scripts/
-  run.mjs               — Universal runner: node scripts/run.mjs <name>
-  demo-v3-pipeline.mjs  — One-shot full pipeline demo
-```
-
-**To add a new strategy:** create `strategies/<name>/index.mjs`, export `meta`, `scan()`, `onStop()`.
+| Phase | Scope | Status |
+|---|---|---|
+| 0 | Foundation: signals, WebSocket, execution tracking | ✅ |
+| 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED |
+| 2 | Regime detection engine | ✅ |
+| 3 | Quant risk: Kelly, Sharpe, VaR, correlation | ✅ |
+| 4a | Execution algos: TWAP, VWAP, SOR stub, slippage | ✅ |
+| 4b | Institutional client wire-in | 🔴 BLOCKED |
+| Strategy | Folder system + Momentum Breakout + ORB | ✅ |
+| Dashboard | React dashboard wired to V3 MCP backend | ✅ |
+| 5 | Multi-asset: futures hedging, options upgrade | ⬜ |
 
 ---
 
@@ -61,48 +98,40 @@ scripts/
 - **Watchlist:** AAPL, MSFT, NVDA, AMZN, META, GOOGL, SPY, QQQ
 - **Signal:** RSI 40–65 + MACD bullish histogram + price > 20-day SMA
 - **Regime filter:** trending_bull, low_volatility, range_bound only
-- **Sizing:** Kelly from journal → SOR → TWAP (3 slices × 10 min, 30 min window)
-- **Scans:** 9:30 AM ET + 10:30 AM ET
-- **Stop:** 3:59 PM ET
+- **Sizing:** Kelly → SOR → TWAP (3 slices × 10 min, 30-min window)
+- **Scans:** 9:30 AM ET + 10:30 AM ET  |  **Stop:** 3:59 PM ET
 
 ### ORB — Opening Range Breakout
-- **Symbol:** SPY (configurable in config.json)
-- **Range:** First 1h candle 9:30–10:30 ET (high/low)
-- **Entry:** Breakout above ORB high (long) or below ORB low (short)
-- **Confirmation:** VWAP computed from intraday 5-min bars
-- **R:R:** 1:2 — stop at opposite range boundary, target = 2× risk
-- **Time exit:** 3:00 PM ET if stop/target not hit
-- **Frequency:** One trade per day; polls every 5 min after 10:30 AM
+- **Symbol:** SPY
+- **Range:** First 1h candle 9:30–10:30 ET
+- **Entry:** Breakout above/below ORB range with VWAP confirmation
+- **R:R:** 1:2 — stop at opposite range boundary
+- **Time exit:** 3:00 PM ET  |  **One trade/day**
 
 ---
 
-## Phase 1 — BLOCKED
-Waiting on Richard Kim's firm API credentials + REST spec.
+## Known Issues / Watch Points
 
-## Phase 4b — BLOCKED (same)
-Institutional client + full SOR routing needs Phase 1 API.
+- **Activity feed** reads from `logs/*-activity.jsonl`. Files are only created when strategy runners are active. Until strategies start, the feed shows "Waiting for activity…" — expected.
+- **Portfolio history chart** shows "Collecting performance data…" for new paper accounts with no history. Mock data kicks in only after `/api/status` returns a real account object.
+- **Regime / Risk panels** show "unavailable" if the MCP D1 has no cached data yet. Run the demo pipeline once to seed: `node scripts/demo-v3-pipeline.mjs`
 
 ---
 
-## V3 Phase Timeline
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 0 | Foundation: signals, WebSocket, execution tracking | ✅ |
-| 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED |
-| 2 | Regime detection engine | ✅ |
-| 3 | Quant risk: Kelly, Sharpe, VaR, correlation | ✅ |
-| 4a | Execution algos: TWAP, VWAP, SOR stub, slippage | ✅ |
-| 4b | Institutional client wire-in | 🔴 BLOCKED |
-| Strategy | Folder system + Momentum Breakout + ORB | ✅ |
-| 5 | Multi-asset: futures hedging, options upgrade | ⬜ |
+## Blocked Items
+
+- **Phase 1 / Phase 4b** — Waiting on Richard Kim's firm API credentials + REST spec.
+- Do not build institutional data layer or full SOR routing until API spec arrives.
 
 ---
 
 ## Next Session Options
-- **Add more strategies** — VWAP Reversion, Gap & Go, Mean Reversion, etc.
-- **Review today's trade logs** — check /tmp/nw-momentum.log and /tmp/nw-orb.log after market close
-- **Phase 4b** — unblocked when Richard's firm API arrives
-- **Phase 5** — futures hedging + options upgrade
+
+- **Phase 5** — futures hedging (MES/ES), options strategy upgrade
+- **More strategies** — VWAP Reversion, Gap & Go, Mean Reversion
+- **Dashboard enhancements** — add ErrorBoundary component, strategy runner status panel
+- **Review trade logs** — check `/tmp/nw-*.log` or `logs/` after a market session
+- **Phase 4b** — unblocked when Richard's API spec arrives
 
 ## Partnership Context
 Richard Kim — institutional HFT clearing firm, 2-3% US equity volume.
