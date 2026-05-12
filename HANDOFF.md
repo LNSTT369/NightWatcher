@@ -1,7 +1,7 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
 **Date:** 2026-05-11
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Phase 3 Build — Quant Risk Framework — Complete
+**Session type:** Phase 4a Build — Smart Execution Layer — Complete
 
 ---
 
@@ -9,8 +9,8 @@
 ```
 Branch:  NIGHTWATCHER-V3
 Remote:  not yet pushed
-Status:  Phase 3 committed — clean working tree
-Latest:  2e1eaaf feat(phase-3): quant risk framework — Kelly, Sharpe, VaR, correlation guard
+Status:  Phase 4a committed — clean working tree
+Latest:  839c010 feat(phase-4a): smart execution layer — TWAP, VWAP, SOR, slippage calc
 ```
 
 ---
@@ -23,52 +23,52 @@ AlphaSignal interface, aggregator, WebSocket /stream, execution fill tracking, s
 ### Phase 2 ✅ — Regime Detection Engine
 ADX, ATR%, realized vol, SPY 20d return → regime classification. D1 persistence, 5-min TTL cache.
 
-### Phase 3 ✅ — Quant Risk Framework (this session)
+### Phase 3 ✅ — Quant Risk Framework
+Kelly, Sharpe, VaR, Pearson correlation guard. 4 MCP tools. `risk_metric_snapshots` D1 table.
+
+### Phase 4a ✅ — Smart Execution Layer (this session)
 
 **Files created:**
 
 | File | Purpose |
 |------|---------|
-| `src/risk/kelly.ts` | Kelly criterion: `f* = (p×b - q) / b`, capped at fraction_cap |
-| `src/risk/sharpe.ts` | Rolling Sharpe: `(mean - rf) / std × √252` |
-| `src/risk/var.ts` | Historical VaR + CVaR at 95%/99% confidence |
-| `src/risk/correlation.ts` | Pearson correlation guard between two symbols |
-| `src/storage/d1/queries/risk_metrics.ts` | Insert/retrieve all risk metric snapshots |
-| `migrations/0007_risk_metrics.sql` | `risk_metric_snapshots` table |
+| `src/execution/algos.ts` | TWAP/VWAP order slicing — pure math, no venue dependency |
+| `src/execution/quality.ts` | Slippage metrics: vs. expected, vs. VWAP, implementation shortfall, fill grade |
+| `src/execution/sor.ts` | Smart Order Router stub — venue + algo selection |
 
 **MCP Tools added:**
-- `risk-kelly-size` — Kelly fraction from trade journal (win rate, avg win/loss pct); filters by symbol or portfolio
-- `risk-sharpe` — Rolling Sharpe from trade journal pnl_pct
-- `risk-var` — Historical VaR + CVaR; fetches live account equity for USD sizing
-- `risk-correlation-check` — Pearson correlation via live Alpaca bar data (not sparse trade history)
+- `execution-twap` — generate TWAP child order schedule `[{qty, not_before_iso}]`
+- `execution-vwap` — generate VWAP-weighted schedule using standard U-shaped intraday curve
+- `execution-sor-route` — SOR: given symbol/size/urgency, returns venue + algo + suggested params
+- `execution-slippage-calc` — compute slippage bps vs. expected/VWAP/decision price + fill grade
 
-**Catalog updated:** added `Risk Quant` category.
+**Catalog updated:** added `Execution Algos` category.
 
 ---
 
 ## Key Implementation Details
 
-### Kelly
-- Input from `trade_journal`: `pnl_pct > 0` = wins, `pnl_pct < 0` = losses
-- Formula: `f* = (win_rate × b - lose_rate) / b` where `b = avg_win / avg_loss`
-- Negative Kelly → 0 (no edge, don't size up)
-- Default cap: 25% of equity
+### TWAP (`buildTwapSchedule`)
+- `n = floor(duration_minutes / interval_minutes)` slices
+- Equal baseQty = `floor(total_qty / n)`, remainder goes to last slice
+- `not_before_iso[i] = start + i × interval_minutes`
 
-### Sharpe
-- Uses `pnl_pct` series from `trade_journal` as "returns"
-- Each trade is treated as one period; `periods_per_year = 252`
-- `is_statistically_meaningful` flags n ≥ 30
+### VWAP (`buildVwapSchedule`)
+- 13 30-min ET buckets, U-shaped: 16% open, 5% midday, 10% close
+- Raw weights for each slot → normalize → integer-share allocation via rounding
+- Last slice = `total_qty - sum(all previous rounded slices)` to avoid drift
+- DST approximation: UTC-4 for months 3–11, UTC-5 otherwise
 
-### VaR
-- Historical simulation (no parametric assumptions)
-- `cutoffIndex = floor((1 - confidence) × n)` into sorted returns
-- CVaR = mean of all returns below the VaR threshold
-- USD values computed from live account equity
+### Quality (`calcSlippageMetrics`)
+- Positive bps = unfavorable for direction (paid more on buy, received less on sell)
+- Grade: excellent ≤5 bps | good ≤15 | fair ≤50 | poor >50
+- Graded by best available benchmark: VWAP > expected > decision price
 
-### Correlation
-- Uses `alpaca.marketData.getBars` for daily bars (not trade history — too sparse)
-- Computes `(close[t] - close[t-1]) / close[t-1] × 100` returns
-- `is_over_threshold = |pearson_r| >= threshold` (default 0.7)
+### SOR (`routeOrder`)
+- Dark pool eligible: notional ≥ $25k
+- Block order: notional ≥ $100k → `requires_institutional = true` (flags when to prefer Richard's firm)
+- Immediate → market | large + session/swing → VWAP | swing + small → TWAP | default → market
+- `requires_institutional` is the forward-compatibility hook for Phase 1 wire-in
 
 ---
 
@@ -77,47 +77,27 @@ Waiting on Richard Kim's firm API credentials + REST spec.
 
 ---
 
-## Next Step — Phase 4: Smart Execution Client
+## Phase 4b — Remaining (after Phase 1 unblocks)
 
-Phase 4 builds the institutional execution layer that replaces the direct Alpaca pass-through.
+When Richard's firm API arrives:
+1. `src/providers/institutional/client.ts` — REST client
+2. `src/providers/institutional/types.ts` — order request/response types
+3. Update `routeOrder` in `sor.ts` — change `venue: "institutional"` when `requires_institutional = true`
+4. `execution-submit-child` MCP tool — submit a single child order from a TWAP/VWAP schedule
+5. `migrations/0008_algo_schedules.sql` — persist generated schedules for audit trail
 
-**What it provides:**
-- Abstraction over multiple execution venues (Alpaca + Richard's firm)
-- Smart Order Routing (SOR): decide venue based on signal type, size, urgency
-- TWAP / VWAP execution algorithms for large orders
-- Dark pool routing preference for block orders (> $25k notional)
-- Execution quality metrics: slippage tracking vs. mid, fill rate
-
-**Preconditions:**
-- Richard's firm REST spec / API credentials (still blocked)
-- Phase 0's `AlphaSignal` + execution fill tracking is the wire-in point
-
-**Files to create (when unblocked):**
-- `src/providers/institutional/client.ts` — Richard's firm REST client
-- `src/providers/institutional/types.ts` — order request/response types
-- `src/execution/sor.ts` — Smart Order Router: chooses Alpaca vs. institutional
-- `src/execution/algos.ts` — TWAP/VWAP slicing logic
-- `src/execution/quality.ts` — slippage and fill rate tracker
-- MCP tools: `execution-sor-route`, `execution-twap`, `execution-quality-report`
-
-**In the meantime (can build now):**
-- `src/execution/algos.ts` — TWAP/VWAP logic is venue-agnostic (just order slicing)
-- `src/execution/quality.ts` — slippage tracking can be built against Alpaca fills now
-- SOR stub that defaults to Alpaca until Richard's firm is wired in
-
-**Start next session with:**
+**Start next 4b session with:**
 ```
-Build src/execution/algos.ts — TWAP/VWAP order slicing.
-Input: total_qty, side, duration_minutes, interval_minutes.
-Output: array of child orders [{qty, not_before_iso}].
-No venue dependency — pure math.
+Build src/providers/institutional/client.ts — REST client for Richard's firm.
+Need: base URL, auth scheme (Bearer? HMAC?), order submit endpoint shape.
+Check Worked ON/ for any API spec notes first.
 ```
 
 ---
 
 ## Open Questions / Blockers
-- **Richard's firm API** — Phase 1 + Phase 4 execution client blocked.
-- **Phase 4 SOR** — can build stub + algos now; need API spec for full routing.
+- **Richard's firm API** — Phase 1 + Phase 4b SOR routing blocked.
+- **algo schedule persistence** — not yet in D1; can add `0008_algo_schedules.sql` if needed for audit.
 
 ---
 
@@ -128,8 +108,9 @@ No venue dependency — pure math.
 | 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED (API access) |
 | 2 | Regime engine + regime-conditional signal routing | ✅ COMPLETE |
 | 3 | Quant risk: Kelly, Sharpe, VaR, correlation guard | ✅ COMPLETE |
-| 4 | Smart execution: SOR, algos, dark pool routing | 🟡 PARTIALLY BUILDABLE (algos + quality now; SOR needs API) |
-| 5 | Multi-asset: futures hedging, options upgrade | ⬜ Pending Phase 4 |
+| 4a | Execution algos: TWAP, VWAP, SOR stub, slippage calc | ✅ COMPLETE |
+| 4b | Institutional client wire-in + SOR full routing | 🔴 BLOCKED (Phase 1 API) |
+| 5 | Multi-asset: futures hedging, options upgrade | ⬜ Pending Phase 4b |
 
 ---
 
