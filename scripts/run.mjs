@@ -19,6 +19,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { fileURLToPath } from "url";
 import path from "path";
+import { appendFileSync, mkdirSync } from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MCP_URL = "http://localhost:8787/mcp";
@@ -60,6 +61,10 @@ function fmtMs(ms) {
 // ── Session state ─────────────────────────────────────────────────────────────
 
 function makeState(strategyName) {
+  const logsDir = path.join(__dirname, "..", "logs");
+  mkdirSync(logsDir, { recursive: true });
+  const activityLog = path.join(logsDir, `${strategyName}-activity.jsonl`);
+
   return {
     strategyName,
     startTime: new Date().toISOString(),
@@ -78,6 +83,11 @@ function makeState(strategyName) {
       const ts = new Date().toISOString();
       const extra = data ? "  " + JSON.stringify(data) : "";
       console.log(`[${ts}] [${strategyName.toUpperCase()}] [${tag}] ${msg}${extra}`);
+      // Write structured entry to JSONL for dashboard-api
+      try {
+        const entry = JSON.stringify({ timestamp: ts, agent: strategyName.toUpperCase(), action: tag, message: msg, ...(data || {}) });
+        appendFileSync(activityLog, entry + "\n");
+      } catch { /* non-fatal */ }
     },
   };
 }

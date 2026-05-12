@@ -44,7 +44,7 @@ echo "╔═══════════════════════�
 echo "║            NIGHTWATCHER V3 — STARTING                   ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
-echo "[1/3] Starting MCP server (wrangler dev)..."
+echo "[1/4] Starting MCP server (wrangler dev)..."
 echo "      Log: $MCP_LOG"
 
 npm run dev > "$MCP_LOG" 2>&1 &
@@ -67,9 +67,21 @@ done
 
 echo ""
 
+# ── Start Dashboard API bridge ────────────────────────────────────────────────
+
+DASH_LOG="$LOG_DIR/dashboard-api-$TIMESTAMP.log"
+echo "[2/4] Starting dashboard API (port 3001)..."
+echo "      Log: $DASH_LOG"
+node scripts/dashboard-api.mjs > "$DASH_LOG" 2>&1 &
+DASH_PID=$!
+PIDS+=("$DASH_PID")
+sleep 1
+
+echo ""
+
 # ── Start strategy runners ────────────────────────────────────────────────────
 
-echo "[2/3] Starting strategies..."
+echo "[3/4] Starting strategies..."
 for strategy in "${STRATEGIES[@]}"; do
   STRAT_LOG="$LOG_DIR/$strategy-$TIMESTAMP.log"
   echo "      → $strategy  (log: $STRAT_LOG)"
@@ -80,15 +92,17 @@ for strategy in "${STRATEGIES[@]}"; do
 done
 
 echo ""
-echo "[3/3] All systems running."
+echo "[4/4] All systems running."
 echo ""
-echo "  MCP server:  http://localhost:8787"
+echo "  MCP server:    http://localhost:8787"
+echo "  Dashboard API: http://localhost:3001"
+echo "  Dashboard UI:  cd dashboard && npm run dev  (port 3000)"
 for strategy in "${STRATEGIES[@]}"; do
-  echo "  Strategy:    $strategy"
+  echo "  Strategy:      $strategy"
 done
 echo ""
-echo "  Logs:        $LOG_DIR/"
-echo "  Stop:        Ctrl+C"
+echo "  Logs:          $LOG_DIR/"
+echo "  Stop:          Ctrl+C"
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo ""
