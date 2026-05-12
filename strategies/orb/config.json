@@ -1,10 +1,17 @@
 {
-  "symbol": "SPY",
-  "notional": 500,
-  "rr_ratio": 2.0,
+  "_watchlist_rule": "Fixed 10-asset universe. Selection criteria: (1) top-tier liquidity >$1B avg daily dollar volume, (2) avg daily range >1% of price — gives breakouts room to run, (3) strong trend-following behaviour on intraday moves. Staying at 10 keeps poll calls to ~20/cycle well inside Alpaca free-tier rate limits.",
+  "watchlist": [
+    "SPY",   "QQQ",   "IWM",
+    "NVDA",  "TSLA",  "META",
+    "AAPL",  "MSFT",  "AMZN",
+    "XLK"
+  ],
   "orb_timeframe": "1Hour",
-  "vwap_timeframe": "5Min",
+  "breakout_buffer_pct": 0.1,
+  "rr_ratio": 2.5,
+  "max_positions": 3,
+  "notional": 500,
   "poll_interval_ms": 300000,
-  "breakout_buffer_pct": 0.05,
-  "time_exit_et": { "hour": 15, "minute": 0 }
+  "entry_cutoff_et": { "hour": 12, "minute": 0 },
+  "time_exit_et": { "hour": 15, "minute": 55 }
 }
