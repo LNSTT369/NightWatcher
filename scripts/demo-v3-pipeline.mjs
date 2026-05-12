@@ -32,7 +32,12 @@ function skip(label, reason) {
 
 async function tool(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
+  const text = res.content[0].text;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Tool "${name}" returned non-JSON: ${text}`);
+  }
 }
 
 async function main() {
@@ -242,8 +247,8 @@ async function main() {
     symbol: SYMBOL,
     side: "buy",
     qty: firstChild.qty,
-    fill_price: fillPrice,
-    expected_price: expectedPrice,
+    ...(fillPrice > 0 && { fill_price: fillPrice }),
+    ...(expectedPrice > 0 && { expected_price: expectedPrice }),
     venue: "alpaca",
     algo_type: "twap",
     dark_pool_pct: 0,
@@ -257,8 +262,8 @@ async function main() {
 
   const quality = await tool(client, "execution-slippage-calc", {
     side: "buy",
-    fill_price: fillPrice,
-    expected_price: expectedPrice,
+    fill_price: fillPrice > 0 ? fillPrice : 0,
+    ...(expectedPrice > 0 && { expected_price: expectedPrice }),
   });
   if (!quality.ok) {
     skip("Slippage calc", "failed");

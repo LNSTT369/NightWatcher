@@ -791,9 +791,9 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         symbol: z.string().min(1),
         side: z.enum(["buy", "sell"]),
         qty: z.number().positive(),
-        fill_price: z.number().positive().optional(),
-        expected_price: z.number().positive().optional(),
-        vwap_at_fill: z.number().positive().optional(),
+        fill_price: z.number().nonnegative().optional(),
+        expected_price: z.number().nonnegative().optional(),
+        vwap_at_fill: z.number().nonnegative().optional(),
         fill_latency_ms: z.number().nonnegative().optional(),
         partial_fill_pct: z.number().min(0).max(100).default(100),
         venue: z.string().default("alpaca"),
@@ -917,10 +917,10 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
       "Calculate fill quality metrics for a completed order: slippage vs. expected price, vs. VWAP at fill, implementation shortfall, and an overall fill grade (excellent/good/fair/poor).",
       {
         side: z.enum(["buy", "sell"]),
-        fill_price: z.number().positive().describe("Actual average fill price"),
-        expected_price: z.number().positive().optional().describe("Pre-trade expected price (limit price or mid-quote at order time)"),
-        vwap_at_fill: z.number().positive().optional().describe("VWAP of the stock at the time of fill"),
-        decision_price: z.number().positive().optional().describe("Mid-quote when the trading decision was made (arrival price for implementation shortfall)"),
+        fill_price: z.number().nonnegative().describe("Actual average fill price"),
+        expected_price: z.number().nonnegative().optional().describe("Pre-trade expected price (limit price or mid-quote at order time)"),
+        vwap_at_fill: z.number().nonnegative().optional().describe("VWAP of the stock at the time of fill"),
+        decision_price: z.number().nonnegative().optional().describe("Mid-quote when the trading decision was made (arrival price for implementation shortfall)"),
       },
       async (input) => {
         try {
