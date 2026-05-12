@@ -40,6 +40,16 @@ import { classifyEvent, generateResearchReport, summarizeLearnedRules, generateT
 import { getDTE } from "../providers/alpaca/options";
 import type { LLMProvider, OptionsProvider } from "../providers/types";
 import type { OptionsOrderPreview } from "./types";
+import {
+  insertAlphaSignal,
+  listRecentSignals,
+  getPendingSignals,
+  insertAggregatedSignal,
+} from "../storage/d1/queries/signals";
+import { getExecutionReport, recordExecutionFill } from "../storage/d1/queries/execution_fills";
+import { aggregateSignals } from "../signals/aggregator";
+import type { AlphaSignal } from "../signals/types";
+import { DEFAULT_TTL } from "../signals/types";
 
 export class NightwatcherMcpAgent extends McpAgent<Env> {
   // @ts-ignore
@@ -106,6 +116,8 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     this.registerNewsTools(db);
     this.registerResearchTools(db, alpaca);
     this.registerOptionsTools();
+    this.registerSignalTools(db);
+    this.registerExecutionTools(db);
     this.registerUtilityTools();
   }
 
@@ -614,6 +626,173 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     );
   }
 
+  private registerSignalTools(db: D1Client) {
+    this.server.tool(
+      "signal-submit",
+      "Submit an alpha signal from any source (llm, technical, l2_microstructure, dark_pool, external, manual)",
+      {
+        source: z.enum(["llm", "technical", "l2_microstructure", "dark_pool", "external", "manual"]),
+        symbol: z.string().min(1).max(10),
+        asset_class: z.enum(["equity", "option", "future"]).default("equity"),
+        direction: z.enum(["long", "short", "neutral"]),
+        confidence: z.number().min(0).max(1),
+        urgency: z.enum(["immediate", "session", "swing"]),
+        horizon: z.number().positive().default(60),
+        rationale: z.string().min(1),
+        suggested_notional: z.number().positive().optional(),
+        suggested_pct_equity: z.number().min(0).max(1).optional(),
+        regime_tags: z.array(z.string()).default([]),
+        supporting_data: z.record(z.unknown()).default({}),
+        ttl_seconds: z.number().positive().optional(),
+      },
+      async (input) => {
+        try {
+          const signal: AlphaSignal = {
+            signal_id: generateId(),
+            source: input.source,
+            generated_at: new Date().toISOString(),
+            ttl_seconds: input.ttl_seconds ?? DEFAULT_TTL[input.urgency],
+            symbol: input.symbol.toUpperCase(),
+            asset_class: input.asset_class,
+            direction: input.direction,
+            confidence: input.confidence,
+            urgency: input.urgency,
+            horizon: input.horizon,
+            suggested_notional: input.suggested_notional,
+            suggested_pct_equity: input.suggested_pct_equity,
+            rationale: input.rationale,
+            regime_tags: input.regime_tags,
+            supporting_data: input.supporting_data,
+          };
+
+          const id = await insertAlphaSignal(db, signal);
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify(success({ signal_id: id, symbol: signal.symbol, direction: signal.direction, confidence: signal.confidence, expires_in_seconds: signal.ttl_seconds }), null, 2),
+            }],
+          };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "signal-list",
+      "List recent alpha signals with optional filtering",
+      {
+        symbol: z.string().optional(),
+        source: z.enum(["llm", "technical", "l2_microstructure", "dark_pool", "external", "manual"]).optional(),
+        direction: z.enum(["long", "short", "neutral"]).optional(),
+        limit: z.number().min(1).max(100).default(20),
+      },
+      async (input) => {
+        try {
+          const signals = await listRecentSignals(db, {
+            symbol: input.symbol,
+            source: input.source,
+            direction: input.direction,
+            limit: input.limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ count: signals.length, signals }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "signal-aggregate",
+      "Aggregate all pending signals for a symbol into a single directional verdict with conflict detection",
+      { symbol: z.string().min(1) },
+      async ({ symbol }) => {
+        try {
+          const pending = await getPendingSignals(db, symbol.toUpperCase());
+
+          if (pending.length === 0) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify(success({ symbol: symbol.toUpperCase(), pending_count: 0, result: null, message: "No live signals found" }), null, 2),
+              }],
+            };
+          }
+
+          const aggregated = aggregateSignals(pending);
+          const aggId = await insertAggregatedSignal(db, aggregated);
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify(success({
+                symbol: symbol.toUpperCase(),
+                pending_count: pending.length,
+                aggregated_signal_id: aggId,
+                final_direction: aggregated.final_direction,
+                final_confidence: aggregated.final_confidence,
+                conflict_detected: aggregated.conflict_detected,
+                source_count: aggregated.source_count,
+                contributing_sources: aggregated.contributing_signals.map((s) => s.source),
+              }), null, 2),
+            }],
+          };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+  }
+
+  private registerExecutionTools(db: D1Client) {
+    this.server.tool(
+      "execution-report",
+      "Get execution quality analytics: slippage, fill latency, venue breakdown",
+      {
+        days: z.number().min(1).max(365).default(30),
+        symbol: z.string().optional(),
+      },
+      async ({ days, symbol }) => {
+        try {
+          const report = await getExecutionReport(db, { days, symbol });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(report), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "execution-record-fill",
+      "Record execution fill quality data for a completed order",
+      {
+        trade_id: z.string().optional(),
+        alpaca_order_id: z.string().optional(),
+        symbol: z.string().min(1),
+        side: z.enum(["buy", "sell"]),
+        qty: z.number().positive(),
+        fill_price: z.number().positive().optional(),
+        expected_price: z.number().positive().optional(),
+        vwap_at_fill: z.number().positive().optional(),
+        fill_latency_ms: z.number().nonnegative().optional(),
+        partial_fill_pct: z.number().min(0).max(100).default(100),
+        venue: z.string().default("alpaca"),
+        algo_type: z.string().default("market"),
+        dark_pool_pct: z.number().min(0).max(100).default(0),
+        signal_id: z.string().optional(),
+        aggregated_signal_id: z.string().optional(),
+      },
+      async (input) => {
+        try {
+          const id = await recordExecutionFill(db, input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ fill_id: id, message: "Fill recorded" }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+  }
+
   private registerUtilityTools() {
     this.server.tool(
       "help-usage",
@@ -648,6 +827,8 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
           { category: "News", tools: ["news-list", "news-index"] },
           { category: "Research", tools: ["symbol-research", "web-scrape-financial"] },
           { category: "Options", tools: ["options-expirations", "options-chain", "options-snapshot", "options-order-preview", "options-order-submit"] },
+          { category: "Signal", tools: ["signal-submit", "signal-list", "signal-aggregate"] },
+          { category: "Execution", tools: ["execution-report", "execution-record-fill"] },
           { category: "Utility", tools: ["help-usage", "catalog-list"] },
         ];
         return { content: [{ type: "text" as const, text: JSON.stringify(success({ catalog }), null, 2) }] };

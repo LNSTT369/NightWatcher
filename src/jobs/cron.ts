@@ -8,6 +8,7 @@ import {
   rawEventExists,
 } from "../storage/d1/queries/events";
 import { createSECEdgarProvider } from "../providers/news/sec-edgar";
+import { cleanupExpiredSignals } from "../storage/d1/queries/signals";
 
 export async function handleCronEvent(cronId: string, env: Env): Promise<void> {
 
@@ -125,8 +126,11 @@ async function runMidnightReset(env: Env): Promise<void> {
     await resetDailyLoss(db);
     console.log("Daily loss counter reset");
 
-    const cleaned = await cleanupExpiredApprovals(db);
-    console.log(`Cleaned up ${cleaned} expired approvals`);
+    const cleanedApprovals = await cleanupExpiredApprovals(db);
+    console.log(`Cleaned up ${cleanedApprovals} expired approvals`);
+
+    const cleanedSignals = await cleanupExpiredSignals(db);
+    console.log(`Cleaned up ${cleanedSignals} stale signals`);
 
   } catch (error) {
     console.error("Midnight reset error:", error);

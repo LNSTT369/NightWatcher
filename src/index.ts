@@ -1,6 +1,7 @@
 import type { Env } from "./env.d";
 import { NightwatcherMcpAgent } from "./mcp/agent";
 import { handleCronEvent } from "./jobs/cron";
+import { handleStreamConnection } from "./stream/handler";
 
 export { SessionDO } from "./durable-objects/session";
 export { NightwatcherMcpAgent };
@@ -45,6 +46,10 @@ export default {
 
     if (url.pathname.startsWith("/mcp")) {
       return NightwatcherMcpAgent.mount("/mcp", { binding: "MCP_AGENT" }).fetch(request, env, ctx);
+    }
+
+    if (url.pathname === "/stream") {
+      return handleStreamConnection(request, env);
     }
 
     return new Response("Not found", { status: 404 });
