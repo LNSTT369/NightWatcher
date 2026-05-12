@@ -29,7 +29,7 @@ const MCP_URL = "http://localhost:8787/mcp";
 const strategyName = process.argv[2];
 if (!strategyName) {
   console.error("Usage: node scripts/run.mjs <strategy-name>");
-  console.error("Available strategies: momentum-breakout, orb");
+  console.error("Available strategies: momentum-breakout, orb, vwap-reversion, gap-and-go, mean-reversion, futures-hedge, options-momentum");
   process.exit(1);
 }
 
@@ -102,7 +102,7 @@ async function main() {
     strategy = await import(stratPath);
   } catch (err) {
     console.error(`Strategy "${strategyName}" not found at ${stratPath}`);
-    console.error("Available: momentum-breakout, orb");
+    console.error("Available: momentum-breakout, orb, vwap-reversion, gap-and-go, mean-reversion, futures-hedge, options-momentum");
     process.exit(1);
   }
 

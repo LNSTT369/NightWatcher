@@ -16,7 +16,7 @@
  */
 
 import http from "http";
-import { readFileSync, existsSync, readdirSync } from "fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -269,6 +269,58 @@ async function handleV3Signals(req, res) {
   json(res, 200, result);
 }
 
+async function handleV3Strategies(req, res) {
+  const strategiesDir = path.join(__dirname, "..", "strategies");
+  const result = [];
+
+  let strategyNames = [];
+  try {
+    strategyNames = readdirSync(strategiesDir).filter(
+      name => existsSync(path.join(strategiesDir, name, "index.mjs"))
+    );
+  } catch { /* strategies dir missing */ }
+
+  const today = new Date().toDateString();
+
+  for (const name of strategyNames) {
+    const activityFile = path.join(LOGS_DIR, `${name}-activity.jsonl`);
+    let lastActivity = null;
+    let lastAction = null;
+    let fillsToday = 0;
+
+    if (existsSync(activityFile)) {
+      try {
+        const raw = readFileSync(activityFile, "utf-8").trim();
+        const lines = raw ? raw.split("\n") : [];
+        const entries = lines.reduce((acc, line) => {
+          try { acc.push(JSON.parse(line)); } catch { /* skip */ }
+          return acc;
+        }, []);
+
+        if (entries.length) {
+          const last = entries[entries.length - 1];
+          lastActivity = last.timestamp;
+          lastAction = last.action + (last.message ? ` — ${last.message}` : "");
+        }
+
+        fillsToday = entries.filter(e => {
+          if (e.action !== "EXEC") return false;
+          return new Date(e.timestamp).toDateString() === today;
+        }).length;
+      } catch { /* unreadable */ }
+    }
+
+    // Strategy is "active" if it logged something in the last 8 hours
+    const status = lastActivity && (Date.now() - new Date(lastActivity).getTime()) < 8 * 3_600_000
+      ? "active"
+      : "idle";
+
+    result.push({ name, status, lastActivity, lastAction, fillsToday });
+  }
+
+  json(res, 200, { ok: true, data: { strategies: result } });
+}
+
 async function handleConfigPost(req, res) {
   try {
     const body = await readBody(req);
@@ -299,6 +351,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/v3/regime")              return await handleV3Regime(req, res);
     if (pathname === "/api/v3/risk")                return await handleV3Risk(req, res);
     if (pathname === "/api/v3/signals")             return await handleV3Signals(req, res);
+    if (pathname === "/api/v3/strategies")          return await handleV3Strategies(req, res);
     if (pathname === "/api/config" && req.method === "POST") return await handleConfigPost(req, res);
 
     json(res, 404, { ok: false, error: { message: "Not found" } });

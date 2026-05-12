@@ -2,18 +2,17 @@
 # NIGHTWATCHER V3 — Start everything
 #
 # Usage: ./start.sh [strategy1] [strategy2] ...
-# Default: runs momentum-breakout and orb
+# Default: runs all 7 strategies
 #
 # Examples:
 #   ./start.sh
-#   ./start.sh momentum-breakout
 #   ./start.sh momentum-breakout orb
+#   ./start.sh vwap-reversion gap-and-go mean-reversion
 
 set -e
 
-STRATEGIES=("${@:-momentum-breakout orb}")
 if [ $# -eq 0 ]; then
-  STRATEGIES=("momentum-breakout" "orb")
+  STRATEGIES=("momentum-breakout" "orb" "vwap-reversion" "gap-and-go" "mean-reversion" "futures-hedge" "options-momentum")
 else
   STRATEGIES=("$@")
 fi
