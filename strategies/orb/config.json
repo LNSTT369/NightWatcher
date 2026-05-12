@@ -1,0 +1,10 @@
+{
+  "symbol": "SPY",
+  "notional": 500,
+  "rr_ratio": 2.0,
+  "orb_timeframe": "1Hour",
+  "vwap_timeframe": "5Min",
+  "poll_interval_ms": 300000,
+  "breakout_buffer_pct": 0.05,
+  "time_exit_et": { "hour": 15, "minute": 0 }
+}
