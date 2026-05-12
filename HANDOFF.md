@@ -1,7 +1,7 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
 **Date:** 2026-05-12
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Bug fixes + Operational reliability — Complete
+**Session type:** ORB v2 Strategy + Dashboard Commit — Complete
 
 ---
 
@@ -9,68 +9,86 @@
 ```
 Branch:  NIGHTWATCHER-V3
 Remote:  pushed ✓
-Latest:  b2f97d1 feat(runner): MCP auto-reconnect + tmux persistent session support
+Latest:  349e375 feat(orb): v2 — ADR%+NR+Regime filters, per-symbol R, Gemini universe
+Prior:   265e1fc feat(dashboard): amber phosphor theme + V3 API endpoints
 ```
 
-Uncommitted (pre-existing dashboard visual overhaul from last session — not yet committed):
-- `agent.mjs` — new API endpoints: `/api/v3/regime`, `/api/v3/risk`, `/api/v3/signals`
-- `dashboard/index.html` — new fonts (Oswald, Barlow Condensed)
+All files committed and pushed. Working tree clean.
+
+---
+
+## What Was Done This Session
+
+### 1. ORB Strategy v2 (`strategies/orb/`)
+
+**Background:** User had run a 12-year ORB backtest across 18 tickers (`/Users/user/Desktop/backtest/`) and side-channel Gemini research validating ADR% + Narrow Range as the dominant filters. The live strategy's old watchlist (SPY, QQQ, IWM, AAPL, MSFT, META, XLK) failed the ADR% dead-zone test.
+
+**`strategies/orb/config.json`** — full rewrite:
+- New watchlist (11 symbols): NVDA, TSLA, AMD, NFLX, AMZN, MU, BILI, COIN, PLTR, HOOD, ABNB
+- Per-symbol R targets from backtest grid: AMZN=3.0, NVDA=1.0, AMD=1.0, COIN=1.5, HOOD=1.5, PLTR=2.0, ABNB=1.5, default=2.0
+- `risk_per_trade_usd: 5` for ADR-anchored sizing
+- Full `filters` block: ADR, narrow_range, regime
+
+**`strategies/orb/index.mjs`** — v2 rewrite:
+- `computeADR()` — 20-day avg `(H-L)/C × 100`
+- `fetchHistoricalRanges()` — 20d of 10:30 ET 60m candles for NR percentile
+- `detectRegime()` — calls `regime-detect` MCP tool, cached once per scan day
+- Three filter gates in `checkBreakouts()` (logged with `FILTER` tag):
+  1. **ADR% gate** — skip if <1.2% (dead zone); warn if 1.2–1.5%
+  2. **Narrow Range** — skip if today's range > 50th percentile of 20d history; NVDA exempt (NR hurts NVDA per sandbox)
+  3. **Regime gate** — skip all longs if regime = bearish
+- Risk-anchored sizing: `qty = min(floor(risk_per_trade_usd / stop_dist), floor(notional / price))`
+- Per-symbol R applied at `enterLong()` for stop/target calc and logging
+
+Scheduler unchanged — still fires at 10:30 AM ET via tmux/cron.
+
+### 2. Dashboard Overhaul Committed (pre-existing from prior session)
+- `agent.mjs` — `/api/v3/regime`, `/api/v3/risk`, `/api/v3/signals` endpoints
+- `dashboard/index.html` — Oswald + Barlow Condensed fonts
 - `dashboard/src/components/Panel.tsx` — accent color + corner bracket support
-- `dashboard/src/index.css` — full amber phosphor theme redesign + scanline animation
-- `dashboard/src/types.ts` — V3 types: `RegimeState`, `KellyData`, `SharpeData`, `VaRData`, `RiskMetrics`, `AlphaSignal`
+- `dashboard/src/index.css` — amber phosphor theme + scanline animation
+- `dashboard/src/types.ts` — V3 types: RegimeState, KellyData, SharpeData, VaRData, RiskMetrics, AlphaSignal
 
 ---
 
-## What Was Fixed This Session
+## Backtest Research (for reference)
 
-### 1. demo-v3-pipeline.mjs crash at Step 9 (`execution-record-fill`)
-**Root cause:** Alpaca paper mode returns `estimated_price: 0` on `orders-preview`. The Zod schemas for `execution-record-fill` and `execution-slippage-calc` used `.positive()` which rejects 0 — Zod validation failed before the handler ran, and the MCP SDK returned a plain-text `"MCP error -32602: ..."` string. The `tool()` helper then did a bare `JSON.parse()` on that string and threw a cryptic `SyntaxError`.
+Source: `/Users/user/Desktop/backtest/` — 18 tickers, 12-year history
+Gemini session notes: `/Users/user/Desktop/gemini discussion.txt`
 
-**Fixes (commit `63239aa`):**
-- `src/mcp/agent.ts`: `fill_price`, `expected_price`, `vwap_at_fill` changed from `.positive()` to `.nonnegative()` in both tools — `calcSlippageBps` already handles 0 by returning null
-- `scripts/demo-v3-pipeline.mjs`: `tool()` helper wraps `JSON.parse` in try/catch and surfaces the real MCP error text
-- `scripts/demo-v3-pipeline.mjs`: price fields conditionally omitted when value is 0
+**Top performers (Sharpe):**
+| Symbol | Best Config | Sharpe | Notes |
+|---|---|---|---|
+| AMZN | Long 3.0R | 2.19 | Best in class |
+| NVDA | Long 1.0R | 2.09 | Momentum monster; NR filter hurts it |
+| COIN | Long 1.5R | 2.06 | Small sample (146 trades) |
+| HOOD | Long 1.5R | 1.83 | High Sharpe, -$2.73 PnL — slippage risk |
+| AMD  | Long 1.0R | 1.68 | Solid, consistent |
 
-### 2. Strategy runners die silently when wrangler dev restarts
-**Root cause:** `run.mjs` opened a single SSE connection at startup with no reconnect logic. Any wrangler restart (file change, crash) left all strategy clients with dead connections — tool calls failed silently.
+**Dead Zone (excluded):** KO (-0.35), TMUS (0.28), XOM (0.34), META long (-0.63), AAPL long, MSFT, SPY, QQQ (ADR% <1.2%)
 
-**Fix (commit `b2f97d1`):**
-- `scripts/run.mjs`: `connectMcp()` retries indefinitely on connect failure (10s backoff)
-- `scripts/run.mjs`: `makeClientProxy()` wraps every tool call — retries up to 3× with 5s backoff + reconnect between attempts
+**ADR% filter thresholds:**
+- ≥1.5% → PASS (high-fuel zone)
+- 1.2–1.5% → CAUTION (log warning, allow)
+- <1.2% → SKIP (dead zone)
 
-### 3. Terminal close kills everything
-**Fix (commit `b2f97d1`):**
-- `start.sh`: `--tmux` flag launches the full stack in a detached tmux session
-- Session name: `nightwatcher` — reuses existing session if already running
+**NR sandbox results (Gemini):**
+- AMZN: Sharpe 0.74 → 1.62 (+118%)
+- PLTR: 1.04 → 1.79 (+72%)
+- COIN: 1.12 → 1.86 (+66%)
+- NVDA: 1.10 → 1.01 (slight decrease — exempt)
 
 ---
 
-## Operational Setup (Complete)
+## Operational Setup (Unchanged)
 
-### Daily startup
 ```bash
 ./start.sh --tmux           # launch detached — survives terminal close
 tmux attach -t nightwatcher  # reattach any time
-tmux kill-session -t nightwatcher  # manual stop
 ```
 
-### Crontab (already live)
-```
-25 9 * * 1-5 /bin/bash -lc 'cd "/Users/user/Desktop/NIGHTWATCHER V2" && ./start.sh --tmux' >> "/Users/user/Desktop/NIGHTWATCHER V2/logs/cron.log" 2>&1
-```
-Fires at 9:25 AM ET Mon–Fri. Errors log to `logs/cron.log`.
-`/bin/bash -lc` ensures nvm/node/wrangler/tmux are all on PATH.
-
-### Dashboard (optional, open/close freely)
-```bash
-cd dashboard && npm run dev   # port 3000 — read-only UI, no effect on strategies
-```
-MCP server (8787) and dashboard API (3001) stay alive in tmux regardless.
-
-### Mac stays awake
-```bash
-caffeinate -i ./start.sh --tmux  # prevents sleep for the life of the session
-```
+Cron: `25 9 * * 1-5` — fires at 9:25 AM ET Mon–Fri
+ORB scan: 10:30 AM ET (captures 9:30–10:30 range), polls every 5 min until noon cutoff, force-closes at 3:55 PM ET.
 
 ---
 
@@ -79,7 +97,7 @@ caffeinate -i ./start.sh --tmux  # prevents sleep for the life of the session
 | # | Strategy | Scans ET | Stop ET |
 |---|---|---|---|
 | 1 | `momentum-breakout` | 9:30, 10:30 AM | 3:30 PM |
-| 2 | `orb` | 10:30 AM | 3:55 PM |
+| 2 | `orb` (v2) | 10:30 AM | 3:55 PM |
 | 3 | `vwap-reversion` | 10:00–14:00 hourly | 3:30 PM |
 | 4 | `gap-and-go` | 9:35 AM | — |
 | 5 | `mean-reversion` | 10:30, 12:00, 13:30 | 3:30 PM |
@@ -88,46 +106,13 @@ caffeinate -i ./start.sh --tmux  # prevents sleep for the life of the session
 
 ---
 
-## Today's Scan Results (2026-05-12)
-
-**vwap-reversion 11:00 AM scan:**
-| Symbol | Price | VWAP | Dev | RSI | Result |
-|---|---|---|---|---|---|
-| AAPL | $294.25 | $293.12 | -0.38% | 64.0 | Skip — above VWAP |
-| NVDA | $218.34 | $220.87 | +1.15% | 44.8 | Skip — 0.35% short of 1.5% threshold |
-| SPY | $734.05 | $735.71 | +0.23% | 34.4 | Skip — below threshold |
-
-No entries triggered today. Closest: NVDA at 1.15% below VWAP (threshold: 1.5%).
-
-**vwap-reversion 12:00 PM scan:** Same prices — no new entries.
-
----
-
-## Completed Phases
-
-| Phase | Scope | Status |
-|---|---|---|
-| 0 | Foundation: signals, WebSocket, execution tracking | ✅ |
-| 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED |
-| 2 | Regime detection engine | ✅ |
-| 3 | Quant risk: Kelly, Sharpe, VaR, correlation | ✅ |
-| 4a | Execution algos: TWAP, VWAP, SOR, slippage | ✅ |
-| 4b | Institutional client wire-in | 🔴 BLOCKED |
-| Strategy | 7-strategy system, all wired to start.sh | ✅ |
-| Dashboard | React dashboard + strategy status panel + ErrorBoundary | ✅ |
-| 5a | Portfolio hedge overlay (SPY short) | ✅ |
-| 5b | Options momentum strategy | ✅ |
-| ORB v2 | Multi-asset, backtest-matched spec | ✅ |
-| Ops | tmux persistence + MCP reconnect + cron | ✅ |
-
----
-
 ## Known Issues / Watch Points
 
 - `options-momentum` silently skips until `options_enabled: true` set in policy
 - `futures-hedge` short-selling requires margin enabled on paper account
-- Dashboard visual overhaul (amber phosphor theme) is uncommitted — see git status
-- If Mac sleeps, tmux session pauses; use `caffeinate` if leaving it unattended overnight
+- **ORB v2 first live day** — watch `logs/orb-activity.jsonl` for `FILTER` tagged lines to confirm ADR%/NR/Regime gates are firing correctly
+- HOOD/PLTR included in watchlist but have Sharpe-PnL paradox (high Sharpe, near-zero absolute PnL) — monitor fill quality
+- If Mac sleeps, tmux session pauses; use `caffeinate` if leaving overnight
 
 ---
 
@@ -140,9 +125,9 @@ No entries triggered today. Closest: NVDA at 1.15% below VWAP (threshold: 1.5%).
 
 ## Next Session Options
 
-- **Commit dashboard overhaul** — 5 modified files (`agent.mjs`, `Panel.tsx`, `index.css`, `types.ts`, `index.html`) ready to stage
-- **Lower vwap-reversion threshold** — NVDA came within 0.35% today; consider tuning `deviation_pct` from 1.5% to 1.2%
-- **Review first live day logs** — after tomorrow's market session check `logs/` for all 7 strategies
+- **Monitor ORB v2 first live session** — check `logs/orb-activity.jsonl` for filter pass rate; if 0 trades for 3+ days, tune `narrow_range.percentile_max` up to 0.6 or `adr.min_pct` down to 1.4
+- **RVOL filter (v2 deferred)** — Gemini's planned "Super Filter": Narrow Range AND high relative volume at 09:45. Validate ADR+NR live for 2–4 weeks first
+- **vwap-reversion threshold** — NVDA came 0.35% short of 1.5% threshold last session; consider tuning `deviation_pct` to 1.2%
 - **Dashboard P&L per strategy** — aggregate fills from JSONL into per-strategy stats panel
 - **Phase 4b** — unblocked when Richard's API spec arrives
 
