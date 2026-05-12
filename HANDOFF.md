@@ -1,7 +1,7 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
 **Date:** 2026-05-12
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Strategy Expansion + ORB Backtest Spec Rebuild — Complete
+**Session type:** Bug fixes + Operational reliability — Complete
 
 ---
 
@@ -9,93 +9,97 @@
 ```
 Branch:  NIGHTWATCHER-V3
 Remote:  pushed ✓
-Status:  clean
-Latest:  8fea177 feat(orb): multi-asset long-only ORB matching backtest spec
+Latest:  b2f97d1 feat(runner): MCP auto-reconnect + tmux persistent session support
 ```
 
----
-
-## What Was Built This Session
-
-### 5 New Strategies (all wired into start.sh)
-
-| Strategy | Scan Times ET | Logic |
-|---|---|---|
-| `vwap-reversion` | 10:00–14:00 (hourly) | Price ≥1.5% below VWAP + RSI<42 → long. Target: VWAP. 5-min monitor. |
-| `gap-and-go` | 9:35 AM | ≥3% gap up + holding → long. 2:1 R:R. Time exit 11 AM. One trade/day. |
-| `mean-reversion` | 10:30, 12:00, 13:30 | Price ≥3% below SMA-20 + RSI<40. Range/high-vol regimes only. |
-| `futures-hedge` (Phase 5) | 10:00 AM + 15-min poll | SPY short when long exposure >$1500 + bearish regime. Auto-unhedges. |
-| `options-momentum` (Phase 5) | 9:30, 10:30 AM | OTM calls on breakout signal. Requires `options_enabled: true` in policy. |
-
-### ORB — Full Rewrite (backtest-matched)
-
-Rebuilt from single-asset SPY to a **10-asset curated universe**, aligned with
-backtested MNQ 60m results (May 2022–May 2026, Sharpe 1.48, expectancy 8.82 pts).
-
-**Watchlist rule — 3 criteria for inclusion:**
-1. Liquidity: >$1B avg daily dollar volume
-2. Range: avg daily range >1% of price (room for 2.5R target)
-3. Behaviour: strong trend-following intraday
-
-`SPY, QQQ, IWM` — index ETFs (broad + small-cap)
-`XLK` — tech sector ETF
-`NVDA, TSLA` — highest ADR mega-caps, strongest trend follow-through
-`META, AAPL, MSFT, AMZN` — mega-cap tech, reliable liquidity
-
-**Rate limit math:** 10 symbols × ~2 MCP calls = ~20 calls/poll cycle. Inside Alpaca free-tier.
-
-**Changes from old ORB:**
-
-| | Old | New |
-|---|---|---|
-| Assets | SPY only | 10-symbol fixed universe |
-| Direction | Long + short | Long only (short Sharpe -1.49) |
-| Target | 2.0R | 2.5R (backtest optimal) |
-| Entry window | All day | Before 12:00 PM ET only |
-| VWAP filter | Required | Removed |
-| Session exit | 3:00 PM | 3:55 PM |
-| Max positions | 1 | 3 simultaneous |
-
-### Dashboard Enhancements
-
-- `ErrorBoundary.tsx` — catches render crashes anywhere in the tree with RETRY button
-- **Strategy Status panel** — replaced Signal Research (always empty in V3). Shows all 7 strategies: live/idle dot, fills today, last action + timestamp. Polls `/api/v3/strategies` every 30s.
-- `dashboard-api.mjs` — new `GET /api/v3/strategies` endpoint
+Uncommitted (pre-existing dashboard visual overhaul from last session — not yet committed):
+- `agent.mjs` — new API endpoints: `/api/v3/regime`, `/api/v3/risk`, `/api/v3/signals`
+- `dashboard/index.html` — new fonts (Oswald, Barlow Condensed)
+- `dashboard/src/components/Panel.tsx` — accent color + corner bracket support
+- `dashboard/src/index.css` — full amber phosphor theme redesign + scanline animation
+- `dashboard/src/types.ts` — V3 types: `RegimeState`, `KellyData`, `SharpeData`, `VaRData`, `RiskMetrics`, `AlphaSignal`
 
 ---
 
-## Full Stack Startup
+## What Was Fixed This Session
 
+### 1. demo-v3-pipeline.mjs crash at Step 9 (`execution-record-fill`)
+**Root cause:** Alpaca paper mode returns `estimated_price: 0` on `orders-preview`. The Zod schemas for `execution-record-fill` and `execution-slippage-calc` used `.positive()` which rejects 0 — Zod validation failed before the handler ran, and the MCP SDK returned a plain-text `"MCP error -32602: ..."` string. The `tool()` helper then did a bare `JSON.parse()` on that string and threw a cryptic `SyntaxError`.
+
+**Fixes (commit `63239aa`):**
+- `src/mcp/agent.ts`: `fill_price`, `expected_price`, `vwap_at_fill` changed from `.positive()` to `.nonnegative()` in both tools — `calcSlippageBps` already handles 0 by returning null
+- `scripts/demo-v3-pipeline.mjs`: `tool()` helper wraps `JSON.parse` in try/catch and surfaces the real MCP error text
+- `scripts/demo-v3-pipeline.mjs`: price fields conditionally omitted when value is 0
+
+### 2. Strategy runners die silently when wrangler dev restarts
+**Root cause:** `run.mjs` opened a single SSE connection at startup with no reconnect logic. Any wrangler restart (file change, crash) left all strategy clients with dead connections — tool calls failed silently.
+
+**Fix (commit `b2f97d1`):**
+- `scripts/run.mjs`: `connectMcp()` retries indefinitely on connect failure (10s backoff)
+- `scripts/run.mjs`: `makeClientProxy()` wraps every tool call — retries up to 3× with 5s backoff + reconnect between attempts
+
+### 3. Terminal close kills everything
+**Fix (commit `b2f97d1`):**
+- `start.sh`: `--tmux` flag launches the full stack in a detached tmux session
+- Session name: `nightwatcher` — reuses existing session if already running
+
+---
+
+## Operational Setup (Complete)
+
+### Daily startup
 ```bash
-# Terminal 1
-./start.sh
-# Launches: MCP server + dashboard-api + all 7 strategies
-
-# Terminal 2
-cd dashboard && npm run dev
+./start.sh --tmux           # launch detached — survives terminal close
+tmux attach -t nightwatcher  # reattach any time
+tmux kill-session -t nightwatcher  # manual stop
 ```
 
-| Service | URL |
-|---|---|
-| MCP server | http://localhost:8787 |
-| Dashboard API | http://localhost:3001 |
-| Dashboard UI | http://localhost:3000 |
+### Crontab (already live)
+```
+25 9 * * 1-5 /bin/bash -lc 'cd "/Users/user/Desktop/NIGHTWATCHER V2" && ./start.sh --tmux' >> "/Users/user/Desktop/NIGHTWATCHER V2/logs/cron.log" 2>&1
+```
+Fires at 9:25 AM ET Mon–Fri. Errors log to `logs/cron.log`.
+`/bin/bash -lc` ensures nvm/node/wrangler/tmux are all on PATH.
 
-Paper account: **PA3NCNZJLERG**
+### Dashboard (optional, open/close freely)
+```bash
+cd dashboard && npm run dev   # port 3000 — read-only UI, no effect on strategies
+```
+MCP server (8787) and dashboard API (3001) stay alive in tmux regardless.
+
+### Mac stays awake
+```bash
+caffeinate -i ./start.sh --tmux  # prevents sleep for the life of the session
+```
 
 ---
 
 ## Full Strategy Roster
 
-| # | Strategy | Scans ET | Key Params |
+| # | Strategy | Scans ET | Stop ET |
 |---|---|---|---|
-| 1 | `momentum-breakout` | 9:30, 10:30 | RSI 40–65 + MACD + SMA-20. Kelly→TWAP. |
-| 2 | `orb` | 10:30 | 60m range, long-only, 2.5R, noon cutoff, 10 assets |
-| 3 | `vwap-reversion` | 10:00–14:00 | VWAP dev ≥1.5% + RSI<42 |
-| 4 | `gap-and-go` | 9:35 | ≥3% gap up, 2:1 R:R, exit 11 AM |
-| 5 | `mean-reversion` | 10:30, 12:00, 13:30 | SMA-20 dev ≥3% + RSI<40, range/vol only |
-| 6 | `futures-hedge` | 10:00 + poll | SPY short overlay, bearish regime trigger |
-| 7 | `options-momentum` | 9:30, 10:30 | OTM calls, requires options_enabled=true |
+| 1 | `momentum-breakout` | 9:30, 10:30 AM | 3:30 PM |
+| 2 | `orb` | 10:30 AM | 3:55 PM |
+| 3 | `vwap-reversion` | 10:00–14:00 hourly | 3:30 PM |
+| 4 | `gap-and-go` | 9:35 AM | — |
+| 5 | `mean-reversion` | 10:30, 12:00, 13:30 | 3:30 PM |
+| 6 | `futures-hedge` | 10:00 AM + 15-min poll | — |
+| 7 | `options-momentum` | 9:30, 10:30 AM | — |
+
+---
+
+## Today's Scan Results (2026-05-12)
+
+**vwap-reversion 11:00 AM scan:**
+| Symbol | Price | VWAP | Dev | RSI | Result |
+|---|---|---|---|---|---|
+| AAPL | $294.25 | $293.12 | -0.38% | 64.0 | Skip — above VWAP |
+| NVDA | $218.34 | $220.87 | +1.15% | 44.8 | Skip — 0.35% short of 1.5% threshold |
+| SPY | $734.05 | $735.71 | +0.23% | 34.4 | Skip — below threshold |
+
+No entries triggered today. Closest: NVDA at 1.15% below VWAP (threshold: 1.5%).
+
+**vwap-reversion 12:00 PM scan:** Same prices — no new entries.
 
 ---
 
@@ -114,15 +118,16 @@ Paper account: **PA3NCNZJLERG**
 | 5a | Portfolio hedge overlay (SPY short) | ✅ |
 | 5b | Options momentum strategy | ✅ |
 | ORB v2 | Multi-asset, backtest-matched spec | ✅ |
+| Ops | tmux persistence + MCP reconnect + cron | ✅ |
 
 ---
 
 ## Known Issues / Watch Points
 
 - `options-momentum` silently skips until `options_enabled: true` set in policy
-- `futures-hedge` short-selling requires margin enabled on paper account (verify once)
-- Regime/risk panels show "unavailable" until D1 seeded: `node scripts/demo-v3-pipeline.mjs`
-- Strategy Status panel shows "idle" for any strategy not run today — expected on first launch
+- `futures-hedge` short-selling requires margin enabled on paper account
+- Dashboard visual overhaul (amber phosphor theme) is uncommitted — see git status
+- If Mac sleeps, tmux session pauses; use `caffeinate` if leaving it unattended overnight
 
 ---
 
@@ -135,9 +140,9 @@ Paper account: **PA3NCNZJLERG**
 
 ## Next Session Options
 
-- **Live session review** — after market close check `logs/` for all 7 strategies, tune thresholds
-- **Enable options** — `policy-update` MCP tool → `options_enabled: true` → watch options-momentum fire
-- **ORB watchlist tuning** — add/remove symbols based on live performance data
+- **Commit dashboard overhaul** — 5 modified files (`agent.mjs`, `Panel.tsx`, `index.css`, `types.ts`, `index.html`) ready to stage
+- **Lower vwap-reversion threshold** — NVDA came within 0.35% today; consider tuning `deviation_pct` from 1.5% to 1.2%
+- **Review first live day logs** — after tomorrow's market session check `logs/` for all 7 strategies
 - **Dashboard P&L per strategy** — aggregate fills from JSONL into per-strategy stats panel
 - **Phase 4b** — unblocked when Richard's API spec arrives
 
