@@ -9,7 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "development"
 # Feature flags
-FEATURE_LLM_RESEARCH = "false"
+FEATURE_LLM_RESEARCH = "true"
 FEATURE_OPTIONS = "false"
 # Default policy (can be overridden in D1)
 DEFAULT_MAX_POSITION_PCT = "0.20"

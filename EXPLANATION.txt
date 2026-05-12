@@ -1,0 +1,33 @@
+# NIGHTWATCHER V2: THE "ELI5" EXPLANATION
+
+Imagine you are building a robot that trades stocks and crypto for you. Here is how all the pieces fit together:
+
+### 1. Cloudflare Workers (The "Robot's Body")
+Think of a Cloudflare Worker as a tiny, super-fast robot that lives on the internet. It doesn't need a giant computer to run; it just "pops" into existence whenever there is work to do. In this project, the Worker is the "body" of Nightwatcher.
+
+### 2. Wrangler (The "Remote Control")
+Wrangler is the tool you use on your laptop to talk to the robot. You use it to tell the robot, "Hey, here is your new code!" or "Start working now!" It’s like the dashboard for managing your robot.
+
+### 3. D1 Database (The "Memory Notebook")
+D1 is like a notebook where the robot writes down everything it sees. Whenever it finds a cool stock or makes a trade, it writes it down here so it never forgets. If the robot restarts, it just opens the notebook to see where it left off.
+
+### 4. Durable Objects (The "Smart Brain with a Personality")
+Regular Workers are "forgetful"—they do a job and then vanish. **Durable Objects** are special because they stay "alive" and keep a specific memory. 
+* We use a Durable Object for the **MCP Agent**. This is like giving the robot a specific "personality" or "desk" where it sits and thinks about your trades. It allows the robot to remember complex thoughts while it's talking to the AI.
+
+### 5. MCP Servers (The "Bridge to the AI")
+**MCP (Model Context Protocol)** is like a special bridge. On one side is the AI (the "Brain"), and on the other side are your trading tools (Alpaca, StockTwits). 
+* Without MCP, the AI can only "talk." 
+* With MCP, the AI can actually "do" things—it can reach across the bridge to check prices, read your notebook (D1), and click the "BUY" button.
+
+### 6. Cron Triggers (The "Alarm Clock")
+The robot needs to know when the stock market opens and closes. Cron Triggers are like a series of alarm clocks. They wake the robot up at 9:30 AM to start trading and tell it to clean up its desk and go to sleep when the market closes.
+
+### 7. KV & R2 (The "Quick Pocket" and "The Filing Cabinet")
+* **KV (Key-Value)** is like the robot's front pocket. It keeps things it needs to grab super fast (like current prices).
+* **R2** is like a big filing cabinet in the back. It stores large documents, like deep research reports the AI wrote about a specific stock.
+
+---
+
+### SUMMARY
+You have a **Robot** (Worker) managed by a **Remote** (Wrangler). It uses a **Notebook** (D1) and a **Smart Brain** (Durable Object) to talk to an **AI** (via the MCP Bridge). It wakes up using **Alarm Clocks** (Crons) and keeps its notes in its **Pockets** (KV) or **Filing Cabinets** (R2).
