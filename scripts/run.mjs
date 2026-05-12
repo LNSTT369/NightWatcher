@@ -92,10 +92,56 @@ function makeState(strategyName) {
   };
 }
 
+// ── MCP connection with auto-reconnect ───────────────────────────────────────
+
+let activeClient = null;
+let reconnecting = false;
+
+async function connectMcp(label) {
+  while (true) {
+    try {
+      const transport = new SSEClientTransport(new URL(MCP_URL));
+      const client = new Client({ name: `v3-${label}`, version: "1.0" }, { capabilities: {} });
+      await client.connect(transport);
+      const r = await client.callTool({ name: "auth-verify", arguments: {} });
+      const auth = JSON.parse(r.content[0].text);
+      if (!auth.ok) throw new Error("Alpaca auth failed");
+      console.log(`  [${new Date().toISOString()}] MCP connected — paper=${auth.data.paper}  account=${auth.data.account_number}`);
+      activeClient = client;
+      reconnecting = false;
+      return client;
+    } catch (err) {
+      console.error(`  [${new Date().toISOString()}] MCP connect failed: ${err.message} — retrying in 10s`);
+      await new Promise(r => setTimeout(r, 10_000));
+    }
+  }
+}
+
+// Returns a proxy that auto-reconnects on tool call failure
+function makeClientProxy(label) {
+  return {
+    callTool: async (args) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          if (!activeClient) await connectMcp(label);
+          return await activeClient.callTool(args);
+        } catch (err) {
+          console.error(`  [${new Date().toISOString()}] Tool "${args.name}" failed (attempt ${attempt + 1}): ${err.message}`);
+          activeClient = null;
+          if (attempt < 2) {
+            await new Promise(r => setTimeout(r, 5_000));
+            await connectMcp(label);
+          }
+        }
+      }
+      throw new Error(`Tool "${args.name}" failed after 3 attempts`);
+    },
+  };
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  // Load strategy
   const stratPath = path.join(__dirname, "..", "strategies", strategyName, "index.mjs");
   let strategy;
   try {
@@ -116,19 +162,10 @@ async function main() {
   console.log(`  Stop:   ${etLabel(meta.stopTime.hour, meta.stopTime.minute)}`);
   console.log();
 
-  // Connect to MCP
   console.log(`  Connecting to ${MCP_URL}...`);
-  const transport = new SSEClientTransport(new URL(MCP_URL));
-  const client = new Client({ name: `v3-${strategyName}`, version: "1.0" }, { capabilities: {} });
-  await client.connect(transport);
+  await connectMcp(strategyName);
 
-  const auth = await (async () => {
-    const r = await client.callTool({ name: "auth-verify", arguments: {} });
-    return JSON.parse(r.content[0].text);
-  })();
-  if (!auth.ok) throw new Error("Alpaca auth failed");
-  console.log(`  Alpaca: paper=${auth.data.paper}  account=${auth.data.account_number}`);
-
+  const client = makeClientProxy(strategyName);
   const state = makeState(strategyName);
 
   // Schedule stop

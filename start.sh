@@ -1,15 +1,33 @@
 #!/bin/bash
 # NIGHTWATCHER V3 — Start everything
 #
-# Usage: ./start.sh [strategy1] [strategy2] ...
-# Default: runs all 7 strategies
+# Usage:
+#   ./start.sh                        # run all 7 strategies in this terminal
+#   ./start.sh --tmux                 # run in detached tmux session (survives terminal close)
+#   ./start.sh momentum-breakout orb  # run specific strategies
 #
-# Examples:
-#   ./start.sh
-#   ./start.sh momentum-breakout orb
-#   ./start.sh vwap-reversion gap-and-go mean-reversion
+# tmux commands:
+#   tmux attach -t nightwatcher       # reattach to running session
+#   tmux kill-session -t nightwatcher # stop everything
 
 set -e
+
+# ── tmux mode ────────────────────────────────────────────────────────────────
+if [ "$1" = "--tmux" ]; then
+  shift
+  SESSION="nightwatcher"
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "[NIGHTWATCHER] Session '$SESSION' already running."
+    echo "  Attach:  tmux attach -t $SESSION"
+    echo "  Stop:    tmux kill-session -t $SESSION"
+    exit 0
+  fi
+  echo "[NIGHTWATCHER] Starting in tmux session '$SESSION'..."
+  tmux new-session -d -s "$SESSION" -x 220 -y 50 \
+    "cd \"$(pwd)\" && ./start.sh $* ; read -p 'Press Enter to close...'"
+  echo "  Started. Attach with:  tmux attach -t $SESSION"
+  exit 0
+fi
 
 if [ $# -eq 0 ]; then
   STRATEGIES=("momentum-breakout" "orb" "vwap-reversion" "gap-and-go" "mean-reversion" "futures-hedge" "options-momentum")
