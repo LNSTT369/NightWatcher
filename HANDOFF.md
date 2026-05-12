@@ -1,124 +1,110 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
-**Date:** 2026-05-11
+**Date:** 2026-05-12
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Phase 4a Build — Smart Execution Layer — Complete
+**Session type:** Phase 4a + Strategy System — Complete
 
 ---
 
 ## Current Git State
 ```
 Branch:  NIGHTWATCHER-V3
-Remote:  not yet pushed
-Status:  Phase 4a committed — clean working tree
-Latest:  839c010 feat(phase-4a): smart execution layer — TWAP, VWAP, SOR, slippage calc
+Remote:  pushed ✓
+Status:  clean
+Latest:  9a70106 feat(strategies): strategy folder system + Momentum Breakout + ORB
 ```
+
+---
+
+## Live Processes (running now)
+```bash
+# Dev server
+npm run dev  → PID ~50194 (port 8787)
+
+# Strategy runners — both scheduled for market open today (2026-05-12)
+node scripts/run.mjs momentum-breakout  → /tmp/nw-momentum.log
+node scripts/run.mjs orb               → /tmp/nw-orb.log
+```
+Paper account: **PA3NCNZJLERG**
 
 ---
 
 ## Completed Phases
 
-### Phase 0 ✅ — Foundation
-AlphaSignal interface, aggregator, WebSocket /stream, execution fill tracking, signal MCP tools.
+### Phase 0 ✅ Foundation
+### Phase 2 ✅ Regime Detection
+### Phase 3 ✅ Quant Risk (Kelly, Sharpe, VaR, Correlation)
+### Phase 4a ✅ Smart Execution (TWAP, VWAP, SOR, Slippage)
 
-### Phase 2 ✅ — Regime Detection Engine
-ADX, ATR%, realized vol, SPY 20d return → regime classification. D1 persistence, 5-min TTL cache.
+### Strategy System ✅ (this session)
 
-### Phase 3 ✅ — Quant Risk Framework
-Kelly, Sharpe, VaR, Pearson correlation guard. 4 MCP tools. `risk_metric_snapshots` D1 table.
+**Structure:**
+```
+strategies/
+  momentum-breakout/    — RSI 40–65 + MACD + above 20-SMA + regime filter
+    index.mjs
+    config.json
+  orb/                  — Opening Range Breakout (1h range + VWAP + 1:2 R:R)
+    index.mjs
+    config.json
+scripts/
+  run.mjs               — Universal runner: node scripts/run.mjs <name>
+  demo-v3-pipeline.mjs  — One-shot full pipeline demo
+```
 
-### Phase 4a ✅ — Smart Execution Layer (this session)
-
-**Files created:**
-
-| File | Purpose |
-|------|---------|
-| `src/execution/algos.ts` | TWAP/VWAP order slicing — pure math, no venue dependency |
-| `src/execution/quality.ts` | Slippage metrics: vs. expected, vs. VWAP, implementation shortfall, fill grade |
-| `src/execution/sor.ts` | Smart Order Router stub — venue + algo selection |
-
-**MCP Tools added:**
-- `execution-twap` — generate TWAP child order schedule `[{qty, not_before_iso}]`
-- `execution-vwap` — generate VWAP-weighted schedule using standard U-shaped intraday curve
-- `execution-sor-route` — SOR: given symbol/size/urgency, returns venue + algo + suggested params
-- `execution-slippage-calc` — compute slippage bps vs. expected/VWAP/decision price + fill grade
-
-**Catalog updated:** added `Execution Algos` category.
+**To add a new strategy:** create `strategies/<name>/index.mjs`, export `meta`, `scan()`, `onStop()`.
 
 ---
 
-## Key Implementation Details
+## Strategy Specs
 
-### TWAP (`buildTwapSchedule`)
-- `n = floor(duration_minutes / interval_minutes)` slices
-- Equal baseQty = `floor(total_qty / n)`, remainder goes to last slice
-- `not_before_iso[i] = start + i × interval_minutes`
+### Momentum Breakout
+- **Watchlist:** AAPL, MSFT, NVDA, AMZN, META, GOOGL, SPY, QQQ
+- **Signal:** RSI 40–65 + MACD bullish histogram + price > 20-day SMA
+- **Regime filter:** trending_bull, low_volatility, range_bound only
+- **Sizing:** Kelly from journal → SOR → TWAP (3 slices × 10 min, 30 min window)
+- **Scans:** 9:30 AM ET + 10:30 AM ET
+- **Stop:** 3:59 PM ET
 
-### VWAP (`buildVwapSchedule`)
-- 13 30-min ET buckets, U-shaped: 16% open, 5% midday, 10% close
-- Raw weights for each slot → normalize → integer-share allocation via rounding
-- Last slice = `total_qty - sum(all previous rounded slices)` to avoid drift
-- DST approximation: UTC-4 for months 3–11, UTC-5 otherwise
-
-### Quality (`calcSlippageMetrics`)
-- Positive bps = unfavorable for direction (paid more on buy, received less on sell)
-- Grade: excellent ≤5 bps | good ≤15 | fair ≤50 | poor >50
-- Graded by best available benchmark: VWAP > expected > decision price
-
-### SOR (`routeOrder`)
-- Dark pool eligible: notional ≥ $25k
-- Block order: notional ≥ $100k → `requires_institutional = true` (flags when to prefer Richard's firm)
-- Immediate → market | large + session/swing → VWAP | swing + small → TWAP | default → market
-- `requires_institutional` is the forward-compatibility hook for Phase 1 wire-in
+### ORB — Opening Range Breakout
+- **Symbol:** SPY (configurable in config.json)
+- **Range:** First 1h candle 9:30–10:30 ET (high/low)
+- **Entry:** Breakout above ORB high (long) or below ORB low (short)
+- **Confirmation:** VWAP computed from intraday 5-min bars
+- **R:R:** 1:2 — stop at opposite range boundary, target = 2× risk
+- **Time exit:** 3:00 PM ET if stop/target not hit
+- **Frequency:** One trade per day; polls every 5 min after 10:30 AM
 
 ---
 
 ## Phase 1 — BLOCKED
 Waiting on Richard Kim's firm API credentials + REST spec.
 
----
-
-## Phase 4b — Remaining (after Phase 1 unblocks)
-
-When Richard's firm API arrives:
-1. `src/providers/institutional/client.ts` — REST client
-2. `src/providers/institutional/types.ts` — order request/response types
-3. Update `routeOrder` in `sor.ts` — change `venue: "institutional"` when `requires_institutional = true`
-4. `execution-submit-child` MCP tool — submit a single child order from a TWAP/VWAP schedule
-5. `migrations/0008_algo_schedules.sql` — persist generated schedules for audit trail
-
-**Start next 4b session with:**
-```
-Build src/providers/institutional/client.ts — REST client for Richard's firm.
-Need: base URL, auth scheme (Bearer? HMAC?), order submit endpoint shape.
-Check Worked ON/ for any API spec notes first.
-```
-
----
-
-## Open Questions / Blockers
-- **Richard's firm API** — Phase 1 + Phase 4b SOR routing blocked.
-- **algo schedule persistence** — not yet in D1; can add `0008_algo_schedules.sql` if needed for audit.
+## Phase 4b — BLOCKED (same)
+Institutional client + full SOR routing needs Phase 1 API.
 
 ---
 
 ## V3 Phase Timeline
 | Phase | Scope | Status |
 |-------|-------|--------|
-| 0 | Foundation: signals, WebSocket, decay, execution tracking | ✅ COMPLETE |
-| 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED (API access) |
-| 2 | Regime engine + regime-conditional signal routing | ✅ COMPLETE |
-| 3 | Quant risk: Kelly, Sharpe, VaR, correlation guard | ✅ COMPLETE |
-| 4a | Execution algos: TWAP, VWAP, SOR stub, slippage calc | ✅ COMPLETE |
-| 4b | Institutional client wire-in + SOR full routing | 🔴 BLOCKED (Phase 1 API) |
-| 5 | Multi-asset: futures hedging, options upgrade | ⬜ Pending Phase 4b |
+| 0 | Foundation: signals, WebSocket, execution tracking | ✅ |
+| 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED |
+| 2 | Regime detection engine | ✅ |
+| 3 | Quant risk: Kelly, Sharpe, VaR, correlation | ✅ |
+| 4a | Execution algos: TWAP, VWAP, SOR stub, slippage | ✅ |
+| 4b | Institutional client wire-in | 🔴 BLOCKED |
+| Strategy | Folder system + Momentum Breakout + ORB | ✅ |
+| 5 | Multi-asset: futures hedging, options upgrade | ⬜ |
 
 ---
 
-## Partnership Context
-**Richard Kim** — former VP at Alpaca, now at institutional HFT clearing firm.
-Processes 2-3% of US equity market volume. Direct member of 14 exchanges + all dark pools.
-Building a "Master MCP layer" (Polygon SIP, Benzinga, FMP, L2/L3).
-Will push real-time signals via the `/stream` WebSocket endpoint (Phase 0).
-**Do not build what they already have.** They are the execution partner.
+## Next Session Options
+- **Add more strategies** — VWAP Reversion, Gap & Go, Mean Reversion, etc.
+- **Review today's trade logs** — check /tmp/nw-momentum.log and /tmp/nw-orb.log after market close
+- **Phase 4b** — unblocked when Richard's firm API arrives
+- **Phase 5** — futures hedging + options upgrade
 
-*V3 positioning: not pure HFT. Best-informed, cleanest-executing algorithmic layer a developer can build. Edge = information quality + execution discipline. See `Worked ON/V3_STANDARD_LANGUAGE.md`.*
+## Partnership Context
+Richard Kim — institutional HFT clearing firm, 2-3% US equity volume.
+Blocked on API spec. Do not build what they already have.
+See `Worked ON/V3_STANDARD_LANGUAGE.md` for V3 positioning language.
