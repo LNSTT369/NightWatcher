@@ -1,17 +1,40 @@
 {
-  "_watchlist_rule": "Fixed 10-asset universe. Selection criteria: (1) top-tier liquidity >$1B avg daily dollar volume, (2) avg daily range >1% of price — gives breakouts room to run, (3) strong trend-following behaviour on intraday moves. Staying at 10 keeps poll calls to ~20/cycle well inside Alpaca free-tier rate limits.",
-  "watchlist": [
-    "SPY",   "QQQ",   "IWM",
-    "NVDA",  "TSLA",  "META",
-    "AAPL",  "MSFT",  "AMZN",
-    "XLK"
-  ],
+  "_watchlist_rule": "High-Fuel (10y ADR%>1.5%): NVDA, TSLA, AMD, NFLX, AMZN, MU, BILI. New Era (IPO>3% ADR%): COIN, PLTR, HOOD, ABNB.",
+  "watchlist": ["NVDA","TSLA","AMD","NFLX","AMZN","MU","BILI","COIN","PLTR","HOOD","ABNB"],
   "orb_timeframe": "1Hour",
   "breakout_buffer_pct": 0.1,
-  "rr_ratio": 2.5,
+  "rr_default": 2.0,
+  "rr_by_symbol": {
+    "AMZN": 3.0,
+    "NVDA": 1.0,
+    "AMD":  1.0,
+    "COIN": 1.5,
+    "HOOD": 1.5,
+    "PLTR": 2.0,
+    "ABNB": 1.5
+  },
   "max_positions": 3,
   "notional": 500,
+  "risk_per_trade_usd": 5,
   "poll_interval_ms": 300000,
   "entry_cutoff_et": { "hour": 12, "minute": 0 },
-  "time_exit_et": { "hour": 15, "minute": 55 }
+  "time_exit_et":    { "hour": 15, "minute": 55 },
+  "filters": {
+    "adr": {
+      "enabled": true,
+      "lookback_days": 20,
+      "min_pct": 1.5,
+      "caution_pct": 1.2
+    },
+    "narrow_range": {
+      "enabled": true,
+      "lookback_days": 20,
+      "percentile_max": 0.5,
+      "exempt_symbols": ["NVDA"]
+    },
+    "regime": {
+      "enabled": true,
+      "block_in": ["bearish"]
+    }
+  }
 }

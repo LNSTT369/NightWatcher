@@ -1,24 +1,25 @@
 /**
- * ORB — Opening Range Breakout (multi-asset, long-only)
+ * ORB v2 — Opening Range Breakout (multi-asset, long-only)
  *
- * Backtested spec (MNQ 60m, May 2022–May 2026):
- *   Long-only  — short-side Sharpe -1.49 on 60m timeframe, structurally unprofitable.
- *   2.5R target — identical 55.98% win rate from 1R to 3R; 2.5R maximises expectancy (8.82 pts).
- *   Noon cutoff — signals only valid before 12:00 PM ET (avoids mid-day doldrums).
- *   60-min range — higher Sharpe (1.48) vs 15-min; filters fake-out trades.
+ * Backtested spec (12-year, 18-ticker Gemini research + backtest folder):
+ *   Long-only  — short-side Sharpe -1.49 on 60m, structurally unprofitable.
+ *   60m range  — Sharpe 1.48 vs 1.10 for 15m; filters fake-out trades.
+ *   Noon cutoff — signals only valid before 12:00 PM ET.
+ *   Per-symbol R — AMZN=3.0, NVDA=1.0, AMD=1.0, COIN=1.5, HOOD=1.5, PLTR=2.0, ABNB=1.5, default=2.0.
+ *
+ * v2 filters (Gemini-validated):
+ *   1. ADR% gate   — 20-day avg daily range % must be ≥1.5%. <1.2% = dead zone, skip.
+ *   2. Narrow Range — today's 9:30–10:30 range in bottom 50% of 20d history (coiled spring effect).
+ *                     NVDA is exempt: NR slightly hurts NVDA (1.10→1.01 Sharpe in sandbox).
+ *   3. Regime gate  — skip longs when regime-detect returns "bearish".
+ *
+ * Sizing: risk-anchored (risk_per_trade_usd / stop_distance), capped at notional / price.
  *
  * Flow:
- *   1. scan() at 10:30 AM — captures the completed 9:30–10:30 ORB for all watchlist symbols.
- *   2. 5-min poll — checks each untraded symbol for a close above range high + buffer.
- *      Entries blocked after 12:00 PM ET.
- *   3. Per-position monitor — polls stop and 2.5R target; closes on first hit.
- *   4. Force-close — any open position is liquidated at 3:55 PM ET (session end).
- *
- * Watchlist rule — 10 fixed assets chosen for:
- *   (a) top-tier liquidity (>$1B avg daily dollar volume),
- *   (b) avg daily range >1% of price (room for breakouts to run),
- *   (c) strong trend-following intraday behaviour.
- *   10 symbols × ~2 MCP calls each = ~20 calls/poll cycle — well inside Alpaca free-tier limits.
+ *   1. scan() at 10:30 AM — captures ORB, computes ADR% + range_percentile, fetches regime.
+ *   2. 5-min poll — checks each symbol through all 3 filter gates before breakout entry.
+ *   3. Per-position monitor — polls stop and per-symbol R target; closes on first hit.
+ *   4. Force-close — all open positions liquidated at 3:55 PM ET.
  */
 
 import { readFileSync } from "fs";
@@ -29,21 +30,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(readFileSync(path.join(__dirname, "config.json"), "utf-8"));
 
 export const meta = {
-  name: "ORB — Opening Range Breakout",
-  description: "60m ORB, long-only, 2.5R target, noon cutoff. 10-asset curated universe.",
+  name: "ORB v2 — Opening Range Breakout",
+  description: "60m ORB, long-only, per-symbol R, ADR%+NR+Regime filters.",
   scanTimes: [{ hour: 10, minute: 30 }],
   stopTime: { hour: 15, minute: 59 },
 };
 
-// symbol → { high, low, range } captured at scan time
+// symbol → { high, low, range, time, adr_pct, range_percentile }
 const orbRanges = new Map();
 
-// symbol → { qty, entry, stop, target, order_id }
+// symbol → { qty, entry, stop, target, rr, order_id }
 const openPositions = new Map();
 
 let pollHandle = null;
+let cachedRegime = null; // fetched once per scan day
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Core helpers ──────────────────────────────────────────────────────────────
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
@@ -66,12 +68,72 @@ function isBeforeEntryCutoff() {
   const offsetMin = (now.getUTCMonth() + 1) >= 3 && (now.getUTCMonth() + 1) <= 11 ? 240 : 300;
   const etNow = new Date(now.getTime() - offsetMin * 60_000);
   const etHour = etNow.getUTCHours();
-  const etMin = etNow.getUTCMinutes();
+  const etMin  = etNow.getUTCMinutes();
   return etHour < cfg.entry_cutoff_et.hour ||
     (etHour === cfg.entry_cutoff_et.hour && etMin < cfg.entry_cutoff_et.minute);
 }
 
-// ── Step 1: capture ORB ranges ────────────────────────────────────────────────
+// ── Filter helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Compute 20-day average daily range percent: mean((H-L)/C) × 100.
+ * Returns null on error.
+ */
+async function computeADR(client, symbol) {
+  const lookback = cfg.filters.adr.lookback_days + 1;
+  const res = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: lookback });
+  if (!res.ok || !res.data.bars?.length) return null;
+
+  const bars = res.data.bars.slice(0, -1); // drop today's incomplete bar
+  if (!bars.length) return null;
+
+  const sum = bars.reduce((acc, b) => acc + (b.h - b.l) / b.c, 0);
+  return (sum / bars.length) * 100;
+}
+
+/**
+ * Fetch the 9:30–10:30 range (h - l) for the last N trading days.
+ * Looks for hourly bars where the bar closes at 10:30 AM ET (UTC hour depends on DST offset).
+ * Returns array of range values (empty on error).
+ */
+async function fetchHistoricalRanges(client, symbol) {
+  const lookback = cfg.filters.narrow_range.lookback_days;
+  const limit = lookback * 8; // ~8 regular-session hourly bars per day
+  const res = await t(client, "prices-bars", { symbol, timeframe: "1Hour", limit });
+  if (!res.ok || !res.data.bars?.length) return [];
+
+  // DST offset: EDT (Mar–Nov) = UTC-4, EST (Dec–Feb) = UTC-5
+  const now = new Date();
+  const isDST = (now.getUTCMonth() + 1) >= 3 && (now.getUTCMonth() + 1) <= 11;
+  const utcHourFor1030ET = isDST ? 14 : 15; // 10:30 ET in UTC
+
+  return res.data.bars
+    .filter(b => {
+      const barTime = new Date(b.t);
+      return barTime.getUTCHours() === utcHourFor1030ET &&
+             barTime.getUTCMinutes() === 30;
+    })
+    .map(b => b.h - b.l);
+}
+
+/**
+ * Call regime-detect once per session; cache result for the day.
+ * Returns "bullish" | "bearish" | "neutral" | null.
+ */
+async function detectRegime(client, state) {
+  if (cachedRegime !== null) return cachedRegime;
+  const res = await t(client, "regime-detect", {});
+  if (!res.ok) {
+    state.log("FILTER", "regime-detect failed — defaulting to neutral");
+    cachedRegime = "neutral";
+  } else {
+    cachedRegime = res.data?.regime ?? "neutral";
+    state.log("FILTER", `Regime: ${cachedRegime}`);
+  }
+  return cachedRegime;
+}
+
+// ── Step 1: capture ORB ranges + filter inputs ────────────────────────────────
 
 async function captureRanges(client, state) {
   state.log("ORB", `Capturing 60m opening ranges for: ${cfg.watchlist.join(", ")}`);
@@ -88,62 +150,109 @@ async function captureRanges(client, state) {
       continue;
     }
 
-    // The ORB is the most recently completed 1h bar (the 9:30–10:30 candle)
-    const bars = res.data.bars;
+    const bars  = res.data.bars;
     const orbBar = bars[bars.length - 2] ?? bars[bars.length - 1];
 
-    const orb = {
-      high: orbBar.h,
-      low:  orbBar.l,
-      range: orbBar.h - orbBar.l,
-      time: orbBar.t,
-    };
-
-    if (orb.range <= 0) {
+    const range = orbBar.h - orbBar.l;
+    if (range <= 0) {
       state.log("ORB", `${symbol} — zero-width range, skipping`);
       continue;
     }
 
-    orbRanges.set(symbol, orb);
-    state.log("ORB", `${symbol} range defined`, {
-      high: orb.high.toFixed(2),
-      low:  orb.low.toFixed(2),
-      range: orb.range.toFixed(2),
+    // Compute filter inputs in parallel
+    const [adr_pct, historicalRanges] = await Promise.all([
+      cfg.filters.adr.enabled     ? computeADR(client, symbol)              : Promise.resolve(null),
+      cfg.filters.narrow_range.enabled ? fetchHistoricalRanges(client, symbol) : Promise.resolve([]),
+    ]);
+
+    // Range percentile: fraction of historical ranges ≤ today's range
+    let range_percentile = null;
+    if (historicalRanges.length >= 5) {
+      const below = historicalRanges.filter(r => r <= range).length;
+      range_percentile = below / historicalRanges.length;
+    }
+
+    orbRanges.set(symbol, {
+      high: orbBar.h,
+      low:  orbBar.l,
+      range,
+      time: orbBar.t,
+      adr_pct,
+      range_percentile,
+    });
+
+    state.log("ORB", `${symbol} range captured`, {
+      high:             orbBar.h.toFixed(2),
+      low:              orbBar.l.toFixed(2),
+      range:            range.toFixed(2),
+      adr_pct:          adr_pct != null ? `${adr_pct.toFixed(2)}%` : "n/a",
+      range_percentile: range_percentile != null ? range_percentile.toFixed(2) : "n/a",
     });
   }
 }
 
-// ── Step 2: poll for breakouts ────────────────────────────────────────────────
+// ── Step 2: poll for breakouts (with filter gates) ────────────────────────────
 
 async function checkBreakouts(client, state) {
   const entryOpen = isBeforeEntryCutoff();
 
+  // Regime gate — fetch once per cycle (cached)
+  let regime = null;
+  if (cfg.filters.regime.enabled) {
+    regime = await detectRegime(client, state);
+    if (cfg.filters.regime.block_in.includes(regime)) {
+      state.log("FILTER", `Regime ${regime} — skipping all entries this cycle`);
+      return;
+    }
+  }
+
   for (const symbol of cfg.watchlist) {
-    // Already in this position
     if (openPositions.has(symbol)) continue;
-
-    // Already traded today
-    if (state.traded.has(symbol)) continue;
-
-    // At max positions
+    if (state.traded.has(symbol))  continue;
     if (openPositions.size >= cfg.max_positions) break;
 
-    // No range captured
     const orb = orbRanges.get(symbol);
     if (!orb) continue;
 
-    // Fetch current price
+    // ── ADR% gate ──────────────────────────────────────────────────────────────
+    if (cfg.filters.adr.enabled) {
+      if (orb.adr_pct == null) {
+        state.log("FILTER", `${symbol} — ADR unavailable, skip`);
+        continue;
+      }
+      if (orb.adr_pct < cfg.filters.adr.caution_pct) {
+        state.log("FILTER", `${symbol} — ADR ${orb.adr_pct.toFixed(2)}% < ${cfg.filters.adr.caution_pct}% dead zone, skip`);
+        continue;
+      }
+      if (orb.adr_pct < cfg.filters.adr.min_pct) {
+        state.log("FILTER", `${symbol} — ADR ${orb.adr_pct.toFixed(2)}% in caution zone (${cfg.filters.adr.caution_pct}%–${cfg.filters.adr.min_pct}%), proceeding with caution`);
+      }
+    }
+
+    // ── Narrow Range gate ──────────────────────────────────────────────────────
+    if (cfg.filters.narrow_range.enabled && !cfg.filters.narrow_range.exempt_symbols.includes(symbol)) {
+      if (orb.range_percentile == null) {
+        state.log("FILTER", `${symbol} — NR percentile unavailable (insufficient history), skip`);
+        continue;
+      }
+      if (orb.range_percentile > cfg.filters.narrow_range.percentile_max) {
+        state.log("FILTER", `${symbol} — range pctile ${orb.range_percentile.toFixed(2)} > ${cfg.filters.narrow_range.percentile_max} (not coiled), skip`);
+        continue;
+      }
+      state.log("FILTER", `${symbol} — NR pass (pctile ${orb.range_percentile.toFixed(2)} ≤ ${cfg.filters.narrow_range.percentile_max})`);
+    }
+
+    // ── Breakout price check ───────────────────────────────────────────────────
     const overview = await t(client, "symbol-overview", { symbol });
     if (!overview.ok) continue;
     const price = overview.data.latest_price;
     if (!price) continue;
 
-    const buffer = orb.range * (cfg.breakout_buffer_pct / 100);
+    const buffer   = orb.range * (cfg.breakout_buffer_pct / 100);
     const longBreak = price > orb.high + buffer;
 
     if (!longBreak) continue;
 
-    // Entry cutoff: long signals blocked after noon
     if (!entryOpen) {
       state.log("ORB", `${symbol} breakout confirmed but past noon cutoff — skip`);
       continue;
@@ -151,37 +260,41 @@ async function checkBreakouts(client, state) {
 
     state.log("ORB", `${symbol} LONG breakout confirmed @ $${price.toFixed(2)}`, {
       orb_high: orb.high.toFixed(2),
-      buffer:   buffer.toFixed(2),
+      buffer:   buffer.toFixed(4),
+      adr_pct:  orb.adr_pct?.toFixed(2) ?? "n/a",
     });
 
     await enterLong(client, state, symbol, price, orb);
   }
 }
 
-// ── Step 3: enter long ────────────────────────────────────────────────────────
+// ── Step 3: enter long (ADR-sized, per-symbol R) ──────────────────────────────
 
 async function enterLong(client, state, symbol, price, orb) {
-  const qty = Math.max(1, Math.floor(cfg.notional / price));
-
-  // Stop = ORB low. Target = entry + 2.5 × (entry - ORB low).
-  const risk        = price - orb.low;
+  const rr          = (cfg.rr_by_symbol && cfg.rr_by_symbol[symbol]) ?? cfg.rr_default;
   const stopPrice   = orb.low;
-  const targetPrice = price + cfg.rr_ratio * risk;
+  const stopDist    = price - stopPrice;
+  const targetPrice = price + rr * stopDist;
 
-  state.log("ORB", `${symbol} sizing`, {
+  // ADR-anchored sizing: keep dollar-risk ≈ risk_per_trade_usd
+  const sizedQty   = stopDist > 0 ? Math.floor(cfg.risk_per_trade_usd / stopDist) : 1;
+  const notionalQty = Math.floor(cfg.notional / price);
+  const qty = Math.max(1, Math.min(sizedQty, notionalQty));
+
+  state.log("ORB", `${symbol} sizing (${rr}R target)`, {
     qty,
-    entry:  price.toFixed(2),
-    stop:   stopPrice.toFixed(2),
-    target: targetPrice.toFixed(2),
-    risk_usd: (risk * qty).toFixed(2),
-    reward_usd: (risk * qty * cfg.rr_ratio).toFixed(2),
+    entry:      price.toFixed(2),
+    stop:       stopPrice.toFixed(2),
+    target:     targetPrice.toFixed(2),
+    risk_usd:   (stopDist * qty).toFixed(2),
+    reward_usd: (stopDist * qty * rr).toFixed(2),
   });
 
   await t(client, "signal-submit", {
     source: "technical", symbol, asset_class: "equity",
     direction: "long", confidence: 0.80,
     urgency: "immediate", horizon: 180,
-    rationale: `ORB long breakout above $${orb.high.toFixed(2)}. Entry $${price.toFixed(2)}, stop $${stopPrice.toFixed(2)}, target $${targetPrice.toFixed(2)} (2.5R).`,
+    rationale: `ORB v2 long breakout above $${orb.high.toFixed(2)}. ADR ${orb.adr_pct?.toFixed(2) ?? "n/a"}%, NR pctile ${orb.range_percentile?.toFixed(2) ?? "exempt"}. Entry $${price.toFixed(2)}, stop $${stopPrice.toFixed(2)}, target $${targetPrice.toFixed(2)} (${rr}R).`,
   });
 
   await t(client, "execution-sor-route", {
@@ -204,10 +317,14 @@ async function enterLong(client, state, symbol, price, orb) {
   const submit = await t(client, "orders-submit", { approval_token: preview.data.policy.approval_token });
   if (!submit.ok) { state.log("EXEC", `${symbol} submit failed: ${submit.error?.message}`); return; }
 
-  const fillPrice = preview.data.preview.estimated_price ?? price;
+  const fillPrice = (preview.data.preview.estimated_price || 0) > 0
+    ? preview.data.preview.estimated_price
+    : price;
+
   state.log("EXEC", `✓ BUY ${qty} ${symbol} @ ~$${fillPrice.toFixed(2)}`, {
-    stop:   stopPrice.toFixed(2),
-    target: targetPrice.toFixed(2),
+    stop:     stopPrice.toFixed(2),
+    target:   targetPrice.toFixed(2),
+    rr:       `${rr}R`,
     order_id: submit.data.order.id,
   });
 
@@ -218,10 +335,10 @@ async function enterLong(client, state, symbol, price, orb) {
     venue: "alpaca", algo_type: "market",
   });
 
-  openPositions.set(symbol, { qty, entry: fillPrice, stop: stopPrice, target: targetPrice, order_id: submit.data.order.id });
+  openPositions.set(symbol, { qty, entry: fillPrice, stop: stopPrice, target: targetPrice, rr, order_id: submit.data.order.id });
   state.traded.add(symbol);
   state.positionsOpened++;
-  state.fills.push({ symbol, qty, price: fillPrice, stop: stopPrice, target: targetPrice, order_id: submit.data.order.id, time: new Date().toISOString() });
+  state.fills.push({ symbol, qty, price: fillPrice, stop: stopPrice, target: targetPrice, rr, order_id: submit.data.order.id, time: new Date().toISOString() });
 }
 
 // ── Step 4: monitor open positions ────────────────────────────────────────────
@@ -232,10 +349,10 @@ async function monitorPositions(client, state) {
     if (!overview.ok) continue;
     const price = overview.data.latest_price;
 
-    state.log("MONITOR", `${symbol} $${price.toFixed(2)}  stop=$${pos.stop.toFixed(2)}  target=$${pos.target.toFixed(2)}`);
+    state.log("MONITOR", `${symbol} $${price.toFixed(2)}  stop=$${pos.stop.toFixed(2)}  target=$${pos.target.toFixed(2)} (${pos.rr}R)`);
 
     if (price >= pos.target) {
-      state.log("EXIT", `${symbol} target (2.5R) hit @ $${price.toFixed(2)}`);
+      state.log("EXIT", `${symbol} target (${pos.rr}R) hit @ $${price.toFixed(2)}`);
       await closePosition(client, state, symbol, "target");
     } else if (price <= pos.stop) {
       state.log("EXIT", `${symbol} stop hit @ $${price.toFixed(2)}`);
@@ -257,24 +374,21 @@ async function closePosition(client, state, symbol, reason) {
 // ── Main scan entrypoint ──────────────────────────────────────────────────────
 
 export async function scan(client, state) {
-  // 1. Capture ORB ranges for all watchlist symbols
+  cachedRegime = null; // reset each scan day
+
   await captureRanges(client, state);
 
-  // If all ranges failed, bail
   if (orbRanges.size === 0) {
     state.log("ORB", "No ranges captured — abort");
     return;
   }
 
-  // 2. Already polling from a prior scan call (shouldn't happen with one scanTime, but guard it)
   if (pollHandle) return;
 
-  state.log("ORB", `Polling every ${cfg.poll_interval_ms / 60_000} min. Entry window closes at ${cfg.entry_cutoff_et.hour}:00 ET. Force-exit at ${cfg.time_exit_et.hour}:${String(cfg.time_exit_et.minute).padStart(2,'0')} ET.`);
+  state.log("ORB", `${orbRanges.size} ranges ready. Polling every ${cfg.poll_interval_ms / 60_000} min. Entry closes ${cfg.entry_cutoff_et.hour}:00 ET. Force-exit ${cfg.time_exit_et.hour}:${String(cfg.time_exit_et.minute).padStart(2,"0")} ET.`);
 
-  // Run an immediate first check
   await checkBreakouts(client, state);
 
-  // 3. Start poll loop: check breakouts (if before noon) + monitor positions
   pollHandle = setInterval(async () => {
     try {
       await checkBreakouts(client, state);
@@ -284,7 +398,6 @@ export async function scan(client, state) {
     }
   }, cfg.poll_interval_ms);
 
-  // 4. Force-close everything at session end
   const msToExit = msUntilET(cfg.time_exit_et.hour, cfg.time_exit_et.minute);
   setTimeout(async () => {
     clearInterval(pollHandle);
@@ -300,9 +413,10 @@ export function onStop(state) {
   if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
   orbRanges.clear();
   openPositions.clear();
+  cachedRegime = null;
 
   state.log("SUMMARY", `Positions opened: ${state.positionsOpened}`);
   for (const f of state.fills) {
-    state.log("FILL", `${f.symbol} ×${f.qty} @ $${f.price?.toFixed(2)}  stop=$${f.stop?.toFixed(2)}  target=$${f.target?.toFixed(2)}`);
+    state.log("FILL", `${f.symbol} ×${f.qty} @ $${f.price?.toFixed(2)}  stop=$${f.stop?.toFixed(2)}  target=$${f.target?.toFixed(2)} (${f.rr}R)`);
   }
 }
