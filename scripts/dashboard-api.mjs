@@ -246,6 +246,26 @@ async function handleV3Risk(req, res) {
 
 async function handleV3Signals(req, res) {
   const result = await callTool("signal-list", { limit: 50 });
+  // Normalize to the AlphaSignal shape the dashboard expects.
+  // signal-list returns a minimal row (id, source, symbol, direction,
+  // confidence, urgency, status, created_at) — patch missing fields.
+  if (result.ok && Array.isArray(result.data?.signals)) {
+    result.data.signals = result.data.signals.map(s => ({
+      signal_id:          s.signal_id   ?? s.id ?? "",
+      source:             s.source      ?? "manual",
+      generated_at:       s.generated_at ?? s.created_at ?? new Date().toISOString(),
+      ttl_seconds:        s.ttl_seconds  ?? 3600,
+      symbol:             s.symbol       ?? "",
+      direction:          s.direction    ?? "neutral",
+      confidence:         Number(s.confidence ?? 0),
+      urgency:            s.urgency      ?? "session",
+      horizon:            s.horizon      ?? 0,
+      rationale:          s.rationale    ?? "",
+      regime_tags:        Array.isArray(s.regime_tags) ? s.regime_tags : [],
+      suggested_notional: s.suggested_notional ?? undefined,
+      suggested_pct_equity: s.suggested_pct_equity ?? undefined,
+    }));
+  }
   json(res, 200, result);
 }
 
