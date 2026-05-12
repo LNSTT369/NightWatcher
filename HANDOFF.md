@@ -1,7 +1,7 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
 **Date:** 2026-05-11
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Phase 0 Build — Complete
+**Session type:** Phase 2 Build — Regime Detection Engine — Complete
 
 ---
 
@@ -9,148 +9,128 @@
 ```
 Branch:  NIGHTWATCHER-V3
 Remote:  not yet pushed
-Status:  Phase 0 committed — clean working tree
+Status:  Phase 2 committed — clean working tree
 ```
 
 ---
 
-## Phase 0 — COMPLETE ✅
+## Completed Phases
 
-All Phase 0 tasks are built, typechecked, and committed.
+### Phase 0 ✅ — Foundation (previous session)
+AlphaSignal interface, aggregator, WebSocket /stream, execution fill tracking, signal MCP tools.
 
-### Files Created (Phase 0)
+### Phase 2 ✅ — Regime Detection Engine (this session)
+
+**Files created:**
 
 | File | Purpose |
 |------|---------|
-| `src/signals/types.ts` | `AlphaSignal` + `AggregatedSignal` interfaces; `SOURCE_WEIGHTS`, `DEFAULT_TTL` |
-| `src/signals/aggregator.ts` | Temporal decay aggregator: `score = confidence × exp(-elapsed/ttl) × weight` |
-| `migrations/0004_alpha_signals.sql` | `alpha_signals` + `aggregated_signals` D1 tables |
-| `migrations/0005_execution_fills.sql` | `execution_fills` table with slippage_bps tracking |
-| `src/storage/d1/queries/signals.ts` | `insertAlphaSignal`, `getPendingSignals`, `listRecentSignals`, `insertAggregatedSignal`, `cleanupExpiredSignals` |
-| `src/storage/d1/queries/execution_fills.ts` | `recordExecutionFill` (auto-computes slippage), `getExecutionReport` |
-| `src/stream/handler.ts` | WebSocket `/stream` endpoint — subscribe/unsubscribe/signal/ping protocol |
+| `src/regime/types.ts` | `MarketRegime` union, `RegimeState` interface, `REGIME_PARAMS` risk overrides |
+| `src/regime/detector.ts` | `detectRegime()` — ADX, ATR%, realized vol, SPY 20d return → regime classification |
+| `src/storage/d1/queries/regime.ts` | `insertRegimeSnapshot`, `getLatestRegime`, `listRegimeHistory` |
+| `migrations/0006_regime.sql` | `regime_snapshots` table |
 
-### Files Modified (Phase 0)
+**MCP Tools added:**
+- `regime-detect` — fetches 35 SPY daily bars, classifies regime, persists to D1, respects 5-min TTL cache
+- `regime-history` — lists past regime snapshots (default 20)
 
-| File | Change |
-|------|--------|
-| `src/storage/kv/keys.ts` | Added V3 cache keys + TTLs: pendingSignals, aggregatedSignal, currentRegime, newsVelocity, sourceWeight |
-| `src/storage/kv/client.ts` | Added `CacheEntry<T>`, `cacheEntryFreshness()`, `setTracked()`, `getTracked()` |
-| `src/jobs/cron.ts` | `runMidnightReset` now calls `cleanupExpiredSignals(db)` |
-| `src/index.ts` | Added `/stream` route → `handleStreamConnection` |
-| `src/mcp/agent.ts` | Added `registerSignalTools(db)` + `registerExecutionTools(db)`; updated `catalog-list` with Signal + Execution categories |
-
-### MCP Tools Added (Phase 0)
-
-**Signal category:**
-- `signal-submit` — ingest a raw alpha signal (any source type)
-- `signal-list` — list recent signals with optional filters (symbol, source, direction)
-- `signal-aggregate` — run weighted temporal decay aggregation for a symbol; persists result
-
-**Execution category:**
-- `execution-report` — slippage, fill latency, dark pool %, venue breakdown over N days
-- `execution-record-fill` — manually record a fill for tracking
+**Catalog updated:** added `Regime` category.
 
 ---
 
-## Key Architecture Decisions (locked in Phase 0)
+## Regime Classification Logic
 
-### AlphaSignal Contract
-Every signal source emits `AlphaSignal`:
-`signal_id · source · symbol · direction · confidence · urgency · horizon · ttl_seconds`
+Uses SPY daily bars (35 bars → 20-day lookback + ADX buffer). No external API needed.
 
-Source weights (hardcoded defaults, Phase 2 will make configurable):
 ```
-dark_pool=0.90  l2_microstructure=0.80  external=0.70
-technical=0.60  llm=0.40                manual=0.95
+Crisis:          ATR% > 3.0% OR realized_vol > 60%
+High volatility: ATR% > 1.8% OR realized_vol > 35%
+Trending:        ADX > 25  →  bull (SPY 20d return > 0) or bear (< 0)
+Low volatility:  ATR% < 0.6% AND realized_vol < 12%
+Range-bound:     fallback (ADX < 25, vol normal)
 ```
 
-### Freshness Decay Formula
-`freshness = exp(-elapsed_seconds / ttl_seconds)` — same formula in aggregator AND KV client. One consistent concept throughout the system.
+**Regime risk overrides (applied to signal routing):**
 
-### WebSocket Protocol (`/stream`)
-```
-Inbound:  { type: "subscribe"|"unsubscribe", symbols: string[] }
-          { type: "signal", payload: Omit<AlphaSignal, "signal_id"|"generated_at"> }
-          { type: "ping" }
-Outbound: { type: "subscribed", symbols: string[] }
-          { type: "signal_accepted", signal_id: string, symbol: string }
-          { type: "pong", ts: string }
-          { type: "error", message: string }
-```
-This is the ingest endpoint for Richard's firm to push real-time signals.
+| Regime | Min Confidence | Position Size | Signal TTL Override |
+|--------|---------------|---------------|---------------------|
+| trending_bull | 0.55 | 100% | none |
+| trending_bear | 0.60 | 75% | none |
+| range_bound | 0.65 | 50% | none |
+| high_volatility | 0.70 | 60% | 120s |
+| low_volatility | 0.50 | 100% | none |
+| crisis | 0.85 | 25% | 30s |
 
-### Execution Fill Tracking
-`slippage_bps = ((fill_price - expected_price) / expected_price) × 10000`
-Stored per-fill. `execution-report` tool aggregates by day range and venue.
+**ADX** is computed in `detector.ts` (not in `technicals.ts`) because it requires bar H/L/C — Wilder smoothing over directional movement.
 
 ---
 
-## Partnership Context (unchanged)
-**Richard Kim** — former VP at Alpaca, now at institutional HFT clearing firm.
-His firm processes 2-3% of total US equity market volume, 0 outages in 2024.
-Direct member of 14 exchanges + all dark pools. Building a "Master MCP layer"
-aggregating Polygon SIP data, Benzinga news, FMP analyst data, L2/L3.
-They will push signals via the `/stream` WebSocket endpoint we just built.
-**They are the execution partner for V3. Do not build what they already have.**
+## Phase 1 — BLOCKED
+Waiting on Richard Kim's firm API credentials + REST spec.
+Once received: build institutional data client under `src/providers/institutional/`.
 
 ---
 
-## Exact Next Step — Phase 1 (blocked) OR Phase 2 (can build now)
+## Next Step — Phase 3: Quant Risk Framework
 
-### Option A — Phase 1: Institutional Data Integration (BLOCKED)
-Blocked on: Richard's firm API credentials + REST spec.
-Cannot build until we have their endpoint URL and auth scheme.
-Start here once API access is received.
+Phase 3 builds the quantitative risk layer that sits between signal aggregation and order sizing.
 
-### Option B — Phase 2: Regime Detection Engine (CAN BUILD NOW)
-The regime engine classifies current market state and routes signals accordingly.
-No external API required — uses Alpaca market data + computed signals.
-
-**Regime states to detect:**
-```
-trending_bull | trending_bear | range_bound | high_volatility | low_volatility | crisis
-```
+**What it provides:**
+- Kelly criterion position sizing (replaces flat `suggested_pct_equity`)
+- Sharpe ratio tracking per strategy/symbol
+- Value-at-Risk (VaR) estimate for the current portfolio
+- Correlation guard — prevents over-concentration in correlated positions
 
 **Files to create:**
-- `src/regime/types.ts` — `MarketRegime` union type + `RegimeState` interface
-- `src/regime/detector.ts` — regime classification logic (VIX proxy, trend, vol)
-- `src/storage/d1/queries/regime.ts` — `insertRegimeSnapshot`, `getLatestRegime`
-- `migrations/0006_regime.sql` — `regime_snapshots` table
-- MCP tool: `regime-detect` — trigger detection + store result
-- MCP tool: `regime-history` — list past regime states
+- `src/risk/kelly.ts` — Kelly fraction: `f = (bp - q) / b` where b=odds, p=win rate, q=1-p
+- `src/risk/sharpe.ts` — rolling Sharpe: `(avg_return - rf) / std_return × sqrt(252)`
+- `src/risk/var.ts` — Historical VaR at 95%/99% confidence using trade journal returns
+- `src/risk/correlation.ts` — Pearson correlation guard across open positions
+- `src/storage/d1/queries/risk_metrics.ts` — persist/retrieve Sharpe, VaR, Kelly snapshots
+- `migrations/0007_risk_metrics.sql` — `risk_metric_snapshots` table
+- MCP tools: `risk-kelly-size`, `risk-sharpe`, `risk-var`, `risk-correlation-check`
 
-**Regime detection signals (using existing Alpaca data):**
-1. ADX > 25 → trending; < 20 → range-bound
-2. SPY 20-day return → bull/bear direction
-3. Price volatility (rolling std of returns) → high/low vol
-4. ATR as fraction of price → crisis signal
-
-**Regime affects:**
-- Signal aggregator: high-vol regime → tighten confidence thresholds
-- Order sizing: range-bound → reduce position size 50%
-- TTL override: crisis regime → all signals expire in 30s regardless of source TTL
-
-**Start session with:**
+**Key formulas:**
 ```
-Create src/regime/types.ts with MarketRegime union and RegimeState interface.
+Kelly:  f* = (p × b - q) / b       (cap at 0.25 to prevent overbetting)
+Sharpe: (mean_daily_return - rf) / std_daily_return × sqrt(252)
+VaR95:  5th percentile of historical return distribution × portfolio_value
+```
+
+**Data source for Phase 3:** trade journal (D1 `trade_journal` table) already has pnl_usd, pnl_pct, entry/exit prices — enough to compute rolling Sharpe and historical VaR without external data.
+
+**Start next session with:**
+```
+Create src/risk/kelly.ts — Kelly criterion position sizer.
+Input: win_rate, avg_win_pct, avg_loss_pct, kelly_fraction_cap (default 0.25).
+Output: recommended_pct_equity capped at the fraction cap.
 ```
 
 ---
 
 ## Open Questions / Blockers
-- **API access from Richard's firm** — Phase 1 cannot start without credentials
-- **Execution venue API spec** — Phase 4 abstraction layer ready, awaiting spec
-- **Futures API** — Phase 5, not a current blocker
+- **Richard's firm API** — Phase 1 blocked. Phase 3 can proceed independently.
+- **Execution venue API spec** — Phase 4. Abstraction layer built in Phase 0; awaiting spec.
 
 ---
 
-## V3 Phase Timeline (reference)
+## V3 Phase Timeline
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 0 | Foundation: signals, WebSocket, decay, execution tracking | ✅ COMPLETE |
 | 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED (API access) |
-| 2 | Regime engine + regime-conditional signal routing | 🟡 READY TO BUILD |
-| 3 | Quant risk: Sharpe, VaR, Kelly, factor exposure | ⬜ Pending Phase 2 |
+| 2 | Regime engine + regime-conditional signal routing | ✅ COMPLETE |
+| 3 | Quant risk: Kelly, Sharpe, VaR, correlation guard | 🟡 READY TO BUILD |
 | 4 | Smart execution: SOR, algos, dark pool routing | ⬜ Pending API spec |
 | 5 | Multi-asset: futures hedging, options upgrade | ⬜ Pending Phase 4 |
+
+---
+
+## Partnership Context
+**Richard Kim** — former VP at Alpaca, now at institutional HFT clearing firm.
+Processes 2-3% of US equity market volume. Direct member of 14 exchanges + all dark pools.
+Building a "Master MCP layer" (Polygon SIP, Benzinga, FMP, L2/L3).
+Will push real-time signals via the `/stream` WebSocket endpoint (Phase 0).
+**Do not build what they already have.** They are the execution partner.
+
+*V3 positioning: not pure HFT. Best-informed, cleanest-executing algorithmic layer a developer can build. Edge = information quality + execution discipline. See `Worked ON/V3_STANDARD_LANGUAGE.md`.*

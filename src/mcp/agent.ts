@@ -50,6 +50,8 @@ import { getExecutionReport, recordExecutionFill } from "../storage/d1/queries/e
 import { aggregateSignals } from "../signals/aggregator";
 import type { AlphaSignal } from "../signals/types";
 import { DEFAULT_TTL } from "../signals/types";
+import { detectRegime } from "../regime/detector";
+import { insertRegimeSnapshot, getLatestRegime, listRegimeHistory } from "../storage/d1/queries/regime";
 
 export class NightwatcherMcpAgent extends McpAgent<Env> {
   // @ts-ignore
@@ -118,6 +120,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     this.registerOptionsTools();
     this.registerSignalTools(db);
     this.registerExecutionTools(db);
+    this.registerRegimeTools(db, alpaca);
     this.registerUtilityTools();
   }
 
@@ -793,6 +796,56 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     );
   }
 
+  private registerRegimeTools(db: D1Client, alpaca: ReturnType<typeof createAlpacaProviders>) {
+    this.server.tool(
+      "regime-detect",
+      "Detect current market regime using SPY bars. Classifies into: trending_bull, trending_bear, range_bound, high_volatility, low_volatility, crisis. Persists result to D1 and KV.",
+      {
+        force_refresh: z.boolean().default(false).describe("Re-detect even if a fresh regime is cached"),
+      },
+      async ({ force_refresh }) => {
+        try {
+          // Check KV cache first unless forced
+          if (!force_refresh) {
+            const cached = await getLatestRegime(db);
+            if (cached && new Date(cached.expires_at) > new Date()) {
+              return { content: [{ type: "text" as const, text: JSON.stringify(success({ ...cached, cached: true }), null, 2) }] };
+            }
+          }
+
+          // Fetch 30 daily bars for SPY (regime needs 20-day lookback + ADX buffer)
+          const spyBars = await alpaca.marketData.getBars("SPY", "1Day", { limit: 35 });
+          if (spyBars.length < 20) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "Insufficient SPY bar data for regime detection (need 20+ days)" }), null, 2) }], isError: true };
+          }
+
+          const state = detectRegime({ spyBars });
+          await insertRegimeSnapshot(db, state);
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ ...state, cached: false }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "regime-history",
+      "List recent regime snapshots to see how market conditions have shifted over time",
+      {
+        limit: z.number().min(1).max(100).default(20),
+      },
+      async ({ limit }) => {
+        try {
+          const history = await listRegimeHistory(db, limit);
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ history, count: history.length }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+  }
+
   private registerUtilityTools() {
     this.server.tool(
       "help-usage",
@@ -829,6 +882,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
           { category: "Options", tools: ["options-expirations", "options-chain", "options-snapshot", "options-order-preview", "options-order-submit"] },
           { category: "Signal", tools: ["signal-submit", "signal-list", "signal-aggregate"] },
           { category: "Execution", tools: ["execution-report", "execution-record-fill"] },
+          { category: "Regime", tools: ["regime-detect", "regime-history"] },
           { category: "Utility", tools: ["help-usage", "catalog-list"] },
         ];
         return { content: [{ type: "text" as const, text: JSON.stringify(success({ catalog }), null, 2) }] };
