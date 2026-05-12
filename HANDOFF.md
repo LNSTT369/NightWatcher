@@ -1,7 +1,7 @@
 # NIGHTWATCHER V3 — SESSION HANDOFF
 **Date:** 2026-05-11
 **Branch:** `NIGHTWATCHER-V3`
-**Session type:** Phase 2 Build — Regime Detection Engine — Complete
+**Session type:** Phase 3 Build — Quant Risk Framework — Complete
 
 ---
 
@@ -9,108 +9,115 @@
 ```
 Branch:  NIGHTWATCHER-V3
 Remote:  not yet pushed
-Status:  Phase 2 committed — clean working tree
+Status:  Phase 3 committed — clean working tree
+Latest:  2e1eaaf feat(phase-3): quant risk framework — Kelly, Sharpe, VaR, correlation guard
 ```
 
 ---
 
 ## Completed Phases
 
-### Phase 0 ✅ — Foundation (previous session)
+### Phase 0 ✅ — Foundation
 AlphaSignal interface, aggregator, WebSocket /stream, execution fill tracking, signal MCP tools.
 
-### Phase 2 ✅ — Regime Detection Engine (this session)
+### Phase 2 ✅ — Regime Detection Engine
+ADX, ATR%, realized vol, SPY 20d return → regime classification. D1 persistence, 5-min TTL cache.
+
+### Phase 3 ✅ — Quant Risk Framework (this session)
 
 **Files created:**
 
 | File | Purpose |
 |------|---------|
-| `src/regime/types.ts` | `MarketRegime` union, `RegimeState` interface, `REGIME_PARAMS` risk overrides |
-| `src/regime/detector.ts` | `detectRegime()` — ADX, ATR%, realized vol, SPY 20d return → regime classification |
-| `src/storage/d1/queries/regime.ts` | `insertRegimeSnapshot`, `getLatestRegime`, `listRegimeHistory` |
-| `migrations/0006_regime.sql` | `regime_snapshots` table |
+| `src/risk/kelly.ts` | Kelly criterion: `f* = (p×b - q) / b`, capped at fraction_cap |
+| `src/risk/sharpe.ts` | Rolling Sharpe: `(mean - rf) / std × √252` |
+| `src/risk/var.ts` | Historical VaR + CVaR at 95%/99% confidence |
+| `src/risk/correlation.ts` | Pearson correlation guard between two symbols |
+| `src/storage/d1/queries/risk_metrics.ts` | Insert/retrieve all risk metric snapshots |
+| `migrations/0007_risk_metrics.sql` | `risk_metric_snapshots` table |
 
 **MCP Tools added:**
-- `regime-detect` — fetches 35 SPY daily bars, classifies regime, persists to D1, respects 5-min TTL cache
-- `regime-history` — lists past regime snapshots (default 20)
+- `risk-kelly-size` — Kelly fraction from trade journal (win rate, avg win/loss pct); filters by symbol or portfolio
+- `risk-sharpe` — Rolling Sharpe from trade journal pnl_pct
+- `risk-var` — Historical VaR + CVaR; fetches live account equity for USD sizing
+- `risk-correlation-check` — Pearson correlation via live Alpaca bar data (not sparse trade history)
 
-**Catalog updated:** added `Regime` category.
+**Catalog updated:** added `Risk Quant` category.
 
 ---
 
-## Regime Classification Logic
+## Key Implementation Details
 
-Uses SPY daily bars (35 bars → 20-day lookback + ADX buffer). No external API needed.
+### Kelly
+- Input from `trade_journal`: `pnl_pct > 0` = wins, `pnl_pct < 0` = losses
+- Formula: `f* = (win_rate × b - lose_rate) / b` where `b = avg_win / avg_loss`
+- Negative Kelly → 0 (no edge, don't size up)
+- Default cap: 25% of equity
 
-```
-Crisis:          ATR% > 3.0% OR realized_vol > 60%
-High volatility: ATR% > 1.8% OR realized_vol > 35%
-Trending:        ADX > 25  →  bull (SPY 20d return > 0) or bear (< 0)
-Low volatility:  ATR% < 0.6% AND realized_vol < 12%
-Range-bound:     fallback (ADX < 25, vol normal)
-```
+### Sharpe
+- Uses `pnl_pct` series from `trade_journal` as "returns"
+- Each trade is treated as one period; `periods_per_year = 252`
+- `is_statistically_meaningful` flags n ≥ 30
 
-**Regime risk overrides (applied to signal routing):**
+### VaR
+- Historical simulation (no parametric assumptions)
+- `cutoffIndex = floor((1 - confidence) × n)` into sorted returns
+- CVaR = mean of all returns below the VaR threshold
+- USD values computed from live account equity
 
-| Regime | Min Confidence | Position Size | Signal TTL Override |
-|--------|---------------|---------------|---------------------|
-| trending_bull | 0.55 | 100% | none |
-| trending_bear | 0.60 | 75% | none |
-| range_bound | 0.65 | 50% | none |
-| high_volatility | 0.70 | 60% | 120s |
-| low_volatility | 0.50 | 100% | none |
-| crisis | 0.85 | 25% | 30s |
-
-**ADX** is computed in `detector.ts` (not in `technicals.ts`) because it requires bar H/L/C — Wilder smoothing over directional movement.
+### Correlation
+- Uses `alpaca.marketData.getBars` for daily bars (not trade history — too sparse)
+- Computes `(close[t] - close[t-1]) / close[t-1] × 100` returns
+- `is_over_threshold = |pearson_r| >= threshold` (default 0.7)
 
 ---
 
 ## Phase 1 — BLOCKED
 Waiting on Richard Kim's firm API credentials + REST spec.
-Once received: build institutional data client under `src/providers/institutional/`.
 
 ---
 
-## Next Step — Phase 3: Quant Risk Framework
+## Next Step — Phase 4: Smart Execution Client
 
-Phase 3 builds the quantitative risk layer that sits between signal aggregation and order sizing.
+Phase 4 builds the institutional execution layer that replaces the direct Alpaca pass-through.
 
 **What it provides:**
-- Kelly criterion position sizing (replaces flat `suggested_pct_equity`)
-- Sharpe ratio tracking per strategy/symbol
-- Value-at-Risk (VaR) estimate for the current portfolio
-- Correlation guard — prevents over-concentration in correlated positions
+- Abstraction over multiple execution venues (Alpaca + Richard's firm)
+- Smart Order Routing (SOR): decide venue based on signal type, size, urgency
+- TWAP / VWAP execution algorithms for large orders
+- Dark pool routing preference for block orders (> $25k notional)
+- Execution quality metrics: slippage tracking vs. mid, fill rate
 
-**Files to create:**
-- `src/risk/kelly.ts` — Kelly fraction: `f = (bp - q) / b` where b=odds, p=win rate, q=1-p
-- `src/risk/sharpe.ts` — rolling Sharpe: `(avg_return - rf) / std_return × sqrt(252)`
-- `src/risk/var.ts` — Historical VaR at 95%/99% confidence using trade journal returns
-- `src/risk/correlation.ts` — Pearson correlation guard across open positions
-- `src/storage/d1/queries/risk_metrics.ts` — persist/retrieve Sharpe, VaR, Kelly snapshots
-- `migrations/0007_risk_metrics.sql` — `risk_metric_snapshots` table
-- MCP tools: `risk-kelly-size`, `risk-sharpe`, `risk-var`, `risk-correlation-check`
+**Preconditions:**
+- Richard's firm REST spec / API credentials (still blocked)
+- Phase 0's `AlphaSignal` + execution fill tracking is the wire-in point
 
-**Key formulas:**
-```
-Kelly:  f* = (p × b - q) / b       (cap at 0.25 to prevent overbetting)
-Sharpe: (mean_daily_return - rf) / std_daily_return × sqrt(252)
-VaR95:  5th percentile of historical return distribution × portfolio_value
-```
+**Files to create (when unblocked):**
+- `src/providers/institutional/client.ts` — Richard's firm REST client
+- `src/providers/institutional/types.ts` — order request/response types
+- `src/execution/sor.ts` — Smart Order Router: chooses Alpaca vs. institutional
+- `src/execution/algos.ts` — TWAP/VWAP slicing logic
+- `src/execution/quality.ts` — slippage and fill rate tracker
+- MCP tools: `execution-sor-route`, `execution-twap`, `execution-quality-report`
 
-**Data source for Phase 3:** trade journal (D1 `trade_journal` table) already has pnl_usd, pnl_pct, entry/exit prices — enough to compute rolling Sharpe and historical VaR without external data.
+**In the meantime (can build now):**
+- `src/execution/algos.ts` — TWAP/VWAP logic is venue-agnostic (just order slicing)
+- `src/execution/quality.ts` — slippage tracking can be built against Alpaca fills now
+- SOR stub that defaults to Alpaca until Richard's firm is wired in
 
 **Start next session with:**
 ```
-Create src/risk/kelly.ts — Kelly criterion position sizer.
-Input: win_rate, avg_win_pct, avg_loss_pct, kelly_fraction_cap (default 0.25).
-Output: recommended_pct_equity capped at the fraction cap.
+Build src/execution/algos.ts — TWAP/VWAP order slicing.
+Input: total_qty, side, duration_minutes, interval_minutes.
+Output: array of child orders [{qty, not_before_iso}].
+No venue dependency — pure math.
 ```
 
 ---
 
 ## Open Questions / Blockers
-- **Richard's firm API** — Phase 1 blocked. Phase 3 can proceed independently.
-- **Execution venue API spec** — Phase 4. Abstraction layer built in Phase 0; awaiting spec.
+- **Richard's firm API** — Phase 1 + Phase 4 execution client blocked.
+- **Phase 4 SOR** — can build stub + algos now; need API spec for full routing.
 
 ---
 
@@ -120,8 +127,8 @@ Output: recommended_pct_equity capped at the fraction cap.
 | 0 | Foundation: signals, WebSocket, decay, execution tracking | ✅ COMPLETE |
 | 1 | Institutional data: L2, dark pool, news velocity | 🔴 BLOCKED (API access) |
 | 2 | Regime engine + regime-conditional signal routing | ✅ COMPLETE |
-| 3 | Quant risk: Kelly, Sharpe, VaR, correlation guard | 🟡 READY TO BUILD |
-| 4 | Smart execution: SOR, algos, dark pool routing | ⬜ Pending API spec |
+| 3 | Quant risk: Kelly, Sharpe, VaR, correlation guard | ✅ COMPLETE |
+| 4 | Smart execution: SOR, algos, dark pool routing | 🟡 PARTIALLY BUILDABLE (algos + quality now; SOR needs API) |
 | 5 | Multi-asset: futures hedging, options upgrade | ⬜ Pending Phase 4 |
 
 ---
