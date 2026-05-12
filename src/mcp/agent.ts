@@ -52,6 +52,18 @@ import type { AlphaSignal } from "../signals/types";
 import { DEFAULT_TTL } from "../signals/types";
 import { detectRegime } from "../regime/detector";
 import { insertRegimeSnapshot, getLatestRegime, listRegimeHistory } from "../storage/d1/queries/regime";
+import { calculateKelly } from "../risk/kelly";
+import { calculateSharpe } from "../risk/sharpe";
+import { calculateVaR } from "../risk/var";
+import { calculateCorrelation } from "../risk/correlation";
+import {
+  getJournalReturns,
+  getKellyInputs,
+  insertKellySnapshot,
+  insertSharpeSnapshot,
+  insertVaRSnapshot,
+  insertCorrelationSnapshot,
+} from "../storage/d1/queries/risk_metrics";
 
 export class NightwatcherMcpAgent extends McpAgent<Env> {
   // @ts-ignore
@@ -121,6 +133,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     this.registerSignalTools(db);
     this.registerExecutionTools(db);
     this.registerRegimeTools(db, alpaca);
+    this.registerRiskQuantTools(db, alpaca);
     this.registerUtilityTools();
   }
 
@@ -846,6 +859,147 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     );
   }
 
+  private registerRiskQuantTools(db: D1Client, alpaca: ReturnType<typeof createAlpacaProviders>) {
+    this.server.tool(
+      "risk-kelly-size",
+      "Compute Kelly criterion position size from trade journal history. Returns recommended % of equity to deploy based on historical win rate and payoff ratio. Capped at 25% to prevent overbetting.",
+      {
+        symbol: z.string().optional().describe("Symbol to filter trade history (omit for all symbols)"),
+        kelly_fraction_cap: z.number().min(0.01).max(0.5).default(0.25).describe("Maximum Kelly fraction (default 0.25 = quarter-Kelly)"),
+        lookback_trades: z.number().min(10).max(500).default(100).describe("Number of recent trades to include"),
+      },
+      async ({ symbol, kelly_fraction_cap, lookback_trades }) => {
+        try {
+          const inputs = await getKellyInputs(db, symbol, lookback_trades);
+          if (!inputs) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_FOUND, message: `Insufficient trade history${symbol ? ` for ${symbol}` : ""} (need at least 5 trades with wins and losses)` }), null, 2) }], isError: true };
+          }
+
+          const result = calculateKelly({
+            win_rate: inputs.win_rate,
+            avg_win_pct: inputs.avg_win_pct,
+            avg_loss_pct: inputs.avg_loss_pct,
+            fraction_cap: kelly_fraction_cap,
+          });
+
+          await insertKellySnapshot(db, result, symbol);
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ ...result, n_trades: inputs.n, symbol: symbol ?? "all" }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "risk-sharpe",
+      "Compute rolling Sharpe ratio from trade journal returns. Uses per-trade pnl_pct as the return series. Higher is better; Sharpe > 1.0 is good, > 2.0 is excellent.",
+      {
+        symbol: z.string().optional().describe("Symbol to filter (omit for portfolio-level Sharpe)"),
+        risk_free_annual_pct: z.number().min(0).max(20).default(5.0).describe("Annualized risk-free rate % (default 5.0)"),
+        lookback_trades: z.number().min(10).max(500).default(200).describe("Number of recent trades to include"),
+      },
+      async ({ symbol, risk_free_annual_pct, lookback_trades }) => {
+        try {
+          const returns = await getJournalReturns(db, symbol, lookback_trades);
+          if (returns.length < 5) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_FOUND, message: `Insufficient trade history${symbol ? ` for ${symbol}` : ""} (need at least 5 trades)` }), null, 2) }], isError: true };
+          }
+
+          const result = calculateSharpe({
+            returns,
+            risk_free_annual_pct,
+            periods_per_year: 252,
+          });
+
+          await insertSharpeSnapshot(db, result, symbol);
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ ...result, symbol: symbol ?? "portfolio" }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "risk-var",
+      "Compute historical Value at Risk (VaR) and Conditional VaR (Expected Shortfall) from trade journal returns. Answers: how much can I lose at 95% or 99% confidence?",
+      {
+        confidence: z.enum(["0.95", "0.99"]).default("0.95").describe("Confidence level"),
+        symbol: z.string().optional().describe("Symbol to filter (omit for portfolio-level VaR)"),
+        lookback_trades: z.number().min(10).max(500).default(200).describe("Number of recent trades to include"),
+      },
+      async ({ confidence, symbol, lookback_trades }) => {
+        try {
+          const returns = await getJournalReturns(db, symbol, lookback_trades);
+          if (returns.length < 10) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_FOUND, message: `Insufficient trade history${symbol ? ` for ${symbol}` : ""} (need at least 10 trades)` }), null, 2) }], isError: true };
+          }
+
+          // Fetch portfolio equity for USD VaR calculation
+          const account = await alpaca.trading.getAccount();
+          const portfolio_value = account.equity ?? account.portfolio_value ?? 10000;
+
+          const result = calculateVaR({
+            returns_pct: returns,
+            portfolio_value,
+            confidence: parseFloat(confidence),
+          });
+
+          await insertVaRSnapshot(db, result, symbol);
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ ...result, symbol: symbol ?? "portfolio", portfolio_value }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "risk-correlation-check",
+      "Check Pearson correlation between two symbols using recent daily price bar returns. High correlation (> threshold) means adding both increases concentration risk. Uses market returns, not sparse trade history.",
+      {
+        symbol_a: z.string().describe("First symbol"),
+        symbol_b: z.string().describe("Second symbol"),
+        lookback_days: z.number().min(20).max(252).default(60).describe("Number of trading days for correlation window"),
+        threshold: z.number().min(0.3).max(0.99).default(0.7).describe("Correlation above this flags concentration risk"),
+      },
+      async ({ symbol_a, symbol_b, lookback_days, threshold }) => {
+        try {
+          const [barsA, barsB] = await Promise.all([
+            alpaca.marketData.getBars(symbol_a.toUpperCase(), "1Day", { limit: lookback_days + 1 }),
+            alpaca.marketData.getBars(symbol_b.toUpperCase(), "1Day", { limit: lookback_days + 1 }),
+          ]);
+
+          if (barsA.length < 10 || barsB.length < 10) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_FOUND, message: "Insufficient bar data for one or both symbols" }), null, 2) }], isError: true };
+          }
+
+          // Compute daily log returns from close prices
+          const toReturns = (bars: typeof barsA) =>
+            bars.slice(1).map((bar, i) => {
+              const prev = bars[i]!;
+              return prev.c > 0 ? ((bar.c - prev.c) / prev.c) * 100 : 0;
+            });
+
+          const result = calculateCorrelation({
+            returns_a: toReturns(barsA),
+            returns_b: toReturns(barsB),
+            symbol_a: symbol_a.toUpperCase(),
+            symbol_b: symbol_b.toUpperCase(),
+            threshold,
+          });
+
+          await insertCorrelationSnapshot(db, result);
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(result), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+  }
+
   private registerUtilityTools() {
     this.server.tool(
       "help-usage",
@@ -883,6 +1037,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
           { category: "Signal", tools: ["signal-submit", "signal-list", "signal-aggregate"] },
           { category: "Execution", tools: ["execution-report", "execution-record-fill"] },
           { category: "Regime", tools: ["regime-detect", "regime-history"] },
+          { category: "Risk Quant", tools: ["risk-kelly-size", "risk-sharpe", "risk-var", "risk-correlation-check"] },
           { category: "Utility", tools: ["help-usage", "catalog-list"] },
         ];
         return { content: [{ type: "text" as const, text: JSON.stringify(success({ catalog }), null, 2) }] };
