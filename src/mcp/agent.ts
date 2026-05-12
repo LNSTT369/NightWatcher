@@ -64,6 +64,9 @@ import {
   insertVaRSnapshot,
   insertCorrelationSnapshot,
 } from "../storage/d1/queries/risk_metrics";
+import { buildTwapSchedule, buildVwapSchedule } from "../execution/algos";
+import { calcSlippageMetrics } from "../execution/quality";
+import { routeOrder } from "../execution/sor";
 
 export class NightwatcherMcpAgent extends McpAgent<Env> {
   // @ts-ignore
@@ -132,6 +135,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     this.registerOptionsTools();
     this.registerSignalTools(db);
     this.registerExecutionTools(db);
+    this.registerAlgoTools();
     this.registerRegimeTools(db, alpaca);
     this.registerRiskQuantTools(db, alpaca);
     this.registerUtilityTools();
@@ -809,6 +813,132 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     );
   }
 
+  private registerAlgoTools() {
+    this.server.tool(
+      "execution-twap",
+      "Generate a TWAP (Time-Weighted Average Price) child order schedule. Splits total_qty into equal slices at regular intervals. Returns array of child orders with qty and earliest submission time. Pure computation — does not submit any orders.",
+      {
+        symbol: z.string().min(1).max(10),
+        side: z.enum(["buy", "sell"]),
+        total_qty: z.number().int().positive().describe("Total shares to execute"),
+        duration_minutes: z.number().positive().describe("Total execution window in minutes (e.g. 60 = spread over 1 hour)"),
+        interval_minutes: z.number().positive().describe("Time between child orders in minutes (e.g. 5 = every 5 minutes)"),
+        start_time_iso: z.string().optional().describe("ISO timestamp to start execution (defaults to now)"),
+      },
+      async (input) => {
+        try {
+          if (input.interval_minutes >= input.duration_minutes) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "interval_minutes must be less than duration_minutes" }), null, 2) }],
+              isError: true,
+            };
+          }
+          const schedule = buildTwapSchedule({
+            symbol: input.symbol,
+            side: input.side,
+            total_qty: input.total_qty,
+            duration_minutes: input.duration_minutes,
+            interval_minutes: input.interval_minutes,
+            start_time_iso: input.start_time_iso ?? new Date().toISOString(),
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(schedule), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "execution-vwap",
+      "Generate a VWAP (Volume-Weighted Average Price) child order schedule. Weights each slice by the expected intraday volume at that time using a standard U-shaped volume profile (heavier at open/close, lighter at midday). Returns array of child orders with qty and earliest submission time. Pure computation — does not submit any orders.",
+      {
+        symbol: z.string().min(1).max(10),
+        side: z.enum(["buy", "sell"]),
+        total_qty: z.number().int().positive().describe("Total shares to execute"),
+        duration_minutes: z.number().positive().describe("Total execution window in minutes"),
+        interval_minutes: z.number().positive().describe("Time between child orders in minutes"),
+        start_time_iso: z.string().optional().describe("ISO timestamp to start execution (defaults to now). Important for VWAP: determines which part of the intraday volume curve is used."),
+      },
+      async (input) => {
+        try {
+          if (input.interval_minutes >= input.duration_minutes) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "interval_minutes must be less than duration_minutes" }), null, 2) }],
+              isError: true,
+            };
+          }
+          const schedule = buildVwapSchedule({
+            symbol: input.symbol,
+            side: input.side,
+            total_qty: input.total_qty,
+            duration_minutes: input.duration_minutes,
+            interval_minutes: input.interval_minutes,
+            start_time_iso: input.start_time_iso ?? new Date().toISOString(),
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(schedule), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "execution-sor-route",
+      "Smart Order Router: given symbol, size, urgency, and signal context, recommend the best venue and execution algorithm. Returns venue (alpaca or institutional), algo type (market/limit/twap/vwap), and suggested algo parameters. Institutional venue stub — defaults to alpaca until Richard's firm API is connected.",
+      {
+        symbol: z.string().min(1).max(10),
+        side: z.enum(["buy", "sell"]),
+        total_qty: z.number().int().positive(),
+        notional_usd: z.number().positive().describe("Estimated trade value in USD (drives dark pool eligibility)"),
+        urgency: z.enum(["immediate", "session", "swing"]).describe("immediate = execute now; session = today; swing = days"),
+        signal_source: z.enum(["llm", "technical", "l2_microstructure", "dark_pool", "external", "manual"]).optional(),
+        signal_confidence: z.number().min(0).max(1).optional(),
+      },
+      async (input) => {
+        try {
+          const decision = routeOrder({
+            symbol: input.symbol,
+            side: input.side,
+            total_qty: input.total_qty,
+            notional_usd: input.notional_usd,
+            urgency: input.urgency,
+            signal_source: input.signal_source,
+            signal_confidence: input.signal_confidence,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(decision), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "execution-slippage-calc",
+      "Calculate fill quality metrics for a completed order: slippage vs. expected price, vs. VWAP at fill, implementation shortfall, and an overall fill grade (excellent/good/fair/poor).",
+      {
+        side: z.enum(["buy", "sell"]),
+        fill_price: z.number().positive().describe("Actual average fill price"),
+        expected_price: z.number().positive().optional().describe("Pre-trade expected price (limit price or mid-quote at order time)"),
+        vwap_at_fill: z.number().positive().optional().describe("VWAP of the stock at the time of fill"),
+        decision_price: z.number().positive().optional().describe("Mid-quote when the trading decision was made (arrival price for implementation shortfall)"),
+      },
+      async (input) => {
+        try {
+          const metrics = calcSlippageMetrics({
+            side: input.side,
+            fill_price: input.fill_price,
+            expected_price: input.expected_price,
+            vwap_at_fill: input.vwap_at_fill,
+            decision_price: input.decision_price,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success(metrics), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+  }
+
   private registerRegimeTools(db: D1Client, alpaca: ReturnType<typeof createAlpacaProviders>) {
     this.server.tool(
       "regime-detect",
@@ -1036,6 +1166,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
           { category: "Options", tools: ["options-expirations", "options-chain", "options-snapshot", "options-order-preview", "options-order-submit"] },
           { category: "Signal", tools: ["signal-submit", "signal-list", "signal-aggregate"] },
           { category: "Execution", tools: ["execution-report", "execution-record-fill"] },
+          { category: "Execution Algos", tools: ["execution-twap", "execution-vwap", "execution-sor-route", "execution-slippage-calc"] },
           { category: "Regime", tools: ["regime-detect", "regime-history"] },
           { category: "Risk Quant", tools: ["risk-kelly-size", "risk-sharpe", "risk-var", "risk-correlation-check"] },
           { category: "Utility", tools: ["help-usage", "catalog-list"] },
