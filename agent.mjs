@@ -888,6 +888,44 @@ function startDashboardAPI(orchestrator) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: e.message }));
         }
+      } else if (url.pathname === "/api/v3/regime") {
+        try {
+          const result = await orchestrator.executor.callTool("regime-detect", { force_refresh: false });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      } else if (url.pathname === "/api/v3/risk") {
+        try {
+          const [kelly, sharpe, varResult] = await Promise.allSettled([
+            orchestrator.executor.callTool("risk-kelly-size", { kelly_fraction_cap: 0.25, lookback_trades: 100 }),
+            orchestrator.executor.callTool("risk-sharpe", { risk_free_annual_pct: 5.0, lookback_trades: 200 }),
+            orchestrator.executor.callTool("risk-var", { confidence: "0.95", lookback_trades: 200 }),
+          ]);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            ok: true,
+            data: {
+              kelly: kelly.status === "fulfilled" && kelly.value.ok ? kelly.value.data : null,
+              sharpe: sharpe.status === "fulfilled" && sharpe.value.ok ? sharpe.value.data : null,
+              var: varResult.status === "fulfilled" && varResult.value.ok ? varResult.value.data : null,
+            },
+          }));
+        } catch (e) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      } else if (url.pathname === "/api/v3/signals") {
+        try {
+          const result = await orchestrator.executor.callTool("signal-list", { limit: 20 });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
       } else if (url.pathname === "/api/config" && req.method === "GET") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, data: orchestrator.config }));
