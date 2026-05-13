@@ -1,7 +1,13 @@
 import { parseNumber } from "../lib/utils";
 import type { Env } from "../env.d";
 
-export type OptionsStrategy = "long_call" | "long_put";
+export type OptionsStrategy =
+  | "long_call"
+  | "long_put"
+  | "covered_call"
+  | "cash_secured_put"
+  | "short_call"
+  | "short_put";
 
 export interface OptionsPolicyConfig {
   /** Enable options trading (default: false) */
@@ -57,7 +63,7 @@ export function getDefaultOptionsPolicyConfig(): OptionsPolicyConfig {
     max_dte: 60,
     min_delta: 0.30,
     max_delta: 0.70,
-    allowed_strategies: ["long_call", "long_put"],
+    allowed_strategies: ["long_call", "long_put", "covered_call", "cash_secured_put"],
     no_averaging_down: true,
     max_option_positions: 3,
     min_confidence_for_options: 0.80,
@@ -120,7 +126,7 @@ export function validateOptionsPolicyConfig(config: unknown): OptionsPolicyConfi
     throw new Error("options.max_delta must be greater than min_delta");
   }
 
-  const validStrategies: OptionsStrategy[] = ["long_call", "long_put"];
+  const validStrategies: OptionsStrategy[] = ["long_call", "long_put", "covered_call", "cash_secured_put", "short_call", "short_put"];
   if (!Array.isArray(c.allowed_strategies) || c.allowed_strategies.length === 0) {
     throw new Error("options.allowed_strategies must be a non-empty array");
   }

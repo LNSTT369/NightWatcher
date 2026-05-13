@@ -141,6 +141,19 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
     timeframe: string,
     params?: BarsParams
   ): Promise<Bar[]> {
+    // Without a start date Alpaca returns only today's bar regardless of limit.
+    // Compute a default start far enough back to cover the requested limit.
+    const defaultStart = (limit: number | undefined): string | undefined => {
+      if (params?.start) return undefined; // caller provided one
+      const days = timeframe === "1Day" ? (limit ?? 100) * 2
+                 : timeframe === "1Week" ? (limit ?? 52) * 10
+                 : timeframe === "1Month" ? (limit ?? 12) * 45
+                 : (limit ?? 200); // intraday: 1 calendar day per bar is safe upper bound
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - days);
+      return d.toISOString().split("T")[0];
+    };
+
     if (this.isCrypto(symbol)) {
       const response = await this.client.dataRequest<AlpacaCryptoBarsResponse>(
         "GET",
@@ -148,7 +161,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
         {
           symbols: symbol,
           timeframe,
-          start: params?.start,
+          start: params?.start ?? defaultStart(params?.limit),
           end: params?.end,
           limit: params?.limit,
         }
@@ -165,7 +178,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
       `/v2/stocks/${encodeURIComponent(symbol)}/bars`,
       {
         timeframe,
-        start: params?.start,
+        start: params?.start ?? defaultStart(params?.limit),
         end: params?.end,
         limit: params?.limit,
         adjustment: params?.adjustment,

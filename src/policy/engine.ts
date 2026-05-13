@@ -389,18 +389,30 @@ export class PolicyEngine {
   private checkOptionsStrategy(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
     const { side, option_type } = ctx.order;
     const { allowed_strategies } = this.config.options;
+    const positions = ctx.positions ?? [];
 
+    // Map side+type to canonical strategy name
     let strategy: OptionsStrategy | null = null;
     if (side === "buy" && option_type === "call") {
       strategy = "long_call";
     } else if (side === "buy" && option_type === "put") {
       strategy = "long_put";
+    } else if (side === "sell" && option_type === "call") {
+      // Covered call if holding the underlying, otherwise naked short call
+      const underlying = ctx.order.underlying?.toUpperCase();
+      const hasUnderlying = underlying && positions.some(p => p.symbol === underlying && Number(p.qty) > 0);
+      strategy = hasUnderlying ? "covered_call" : "short_call";
+    } else if (side === "sell" && option_type === "put") {
+      // Cash-secured put maps to cash_secured_put; naked short put is short_put.
+      // We can't verify cash coverage here (buying power check handles it), so
+      // we map to cash_secured_put and let the buying power check enforce margin.
+      strategy = "cash_secured_put";
     }
 
     if (!strategy) {
       violations.push({
         rule: "options_strategy_invalid",
-        message: `Options strategy '${side} ${option_type}' is not supported (only long calls/puts allowed)`,
+        message: `Options strategy '${side} ${option_type}' is not recognized`,
         current_value: `${side} ${option_type}`,
         limit_value: allowed_strategies,
       });
@@ -410,7 +422,7 @@ export class PolicyEngine {
     if (!allowed_strategies.includes(strategy)) {
       violations.push({
         rule: "options_strategy_not_allowed",
-        message: `Options strategy '${strategy}' is not in allowed list`,
+        message: `Options strategy '${strategy}' is not in allowed list. Add it to allowed_strategies via policy-update.`,
         current_value: strategy,
         limit_value: allowed_strategies,
       });

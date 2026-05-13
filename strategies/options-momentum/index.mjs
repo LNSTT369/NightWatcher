@@ -31,24 +31,16 @@ export const meta = {
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
-}
-
-async function checkOptionsEnabled(client) {
-  const policy = await t(client, "policy-get");
-  return policy.ok && policy.data?.options_enabled === true;
+  try {
+    return JSON.parse(res.content[0].text);
+  } catch {
+    return { ok: false, _raw: res.content[0].text };
+  }
 }
 
 export async function scan(client, state) {
   if (state.positionsOpened >= cfg.max_positions) {
     state.log("SCAN", `At max positions (${cfg.max_positions}) — skip`);
-    return;
-  }
-
-  // Options must be enabled in policy
-  const optionsOn = await checkOptionsEnabled(client);
-  if (!optionsOn) {
-    state.log("OPTIONS", "options_enabled=false in policy — skip. Enable via: policy-update tool or demo-v3-pipeline.mjs");
     return;
   }
 
@@ -148,9 +140,10 @@ export async function scan(client, state) {
     time_in_force: "day",
   });
 
-  if (!preview.ok || !preview.data.policy?.allowed) {
-    const why = (preview.data?.policy?.violations || []).map(v => v.message || v.rule).join("; ");
-    state.log("EXEC", `Options blocked: ${why || preview.error?.message}`);
+  if (!preview.ok || !preview.data?.policy?.allowed) {
+    const violations = (preview.data?.policy?.violations || []).map(v => v.message || v.rule).join("; ");
+    const why = violations || preview.error?.message || preview._raw || "policy blocked";
+    state.log("EXEC", `Options blocked: ${why}`);
     return;
   }
 

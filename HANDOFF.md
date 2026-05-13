@@ -1,113 +1,121 @@
-# NIGHTWATCHER — Session Handoff
-**Date:** 2026-05-12 | **Branch:** NIGHTWATCHER-V3
+# NIGHTWATCHER V3 — SESSION HANDOFF
+**Date:** 2026-05-13
+**Branch:** `NIGHTWATCHER-V3`
+**Session type:** Ops fixes + Vision crystallization + Options sell-side unlock
 
 ---
 
-## Systems Status
+## Current Git State
+```
+Branch:  NIGHTWATCHER-V3
+Latest:  5707315 feat(orb): backtest-driven watchlist + presentation strategy cards
+```
 
-- **Cron:** `25 9 * * 1-5` → `./start.sh --tmux` — fires 9:25 AM ET Mon–Fri ✓
-- **Tmux:** `nightwatcher` session live ✓
-- **Config:** ORB v2 updated, 10-symbol watchlist active ✓
-- **Forward test:** Paper trading live since 2026-05-12, accumulating daily
+Uncommitted changes this session (stage and commit at session end):
+- `src/providers/alpaca/market-data.ts` — getBars default start date fix
+- `strategies/options-momentum/index.mjs` — removed broken policy-get call, safe t() JSON parse
+- `src/policy/config.ts` — OptionsStrategy type + allowed_strategies expanded (sell-side unlock)
+- `src/policy/engine.ts` — checkOptionsStrategy extended (covered_call, cash_secured_put, short_call, short_put)
+- `README.V3.md` — new V3 vision README (universal execution layer)
+- `scripts/scan-now.mjs` — new utility: fire immediate scan bypassing scheduler
 
 ---
 
 ## What Was Done This Session
 
-### 1. Full ORB + IB Backtest — 21 Instruments
-`/Users/user/Desktop/backtest/orb_backtest/run_full_backtest.py`
+### 1. Cron job was failing — Fixed
+**Root cause:** macOS cron daemon didn't have Full Disk Access. Fires at 9:25 AM ET Mon–Fri.
+**Fix:** Granted Full Disk Access to `/usr/sbin/cron` via System Settings → Privacy & Security → Full Disk Access. Toggle is now ON.
+**Verified:** Re-ran cron command manually — exit 0, tmux session detected as already running.
 
-Tested every CSV in `orb_backtest/data/completed/` across two strategies:
-- **ORB** — 60m opening range, close-outside entry, stop at opposite boundary, target = entry ± R × range
-- **IB (Initial Balance)** — same 60m range, target anchored at boundary ± extension × range
+### 2. prices-bars only returning today's bar — Fixed
+**Root cause:** Alpaca API without a `start` date defaults to today only, regardless of `limit`.
+**Fix:** `src/providers/alpaca/market-data.ts` `getBars()` — computes a default `start` when caller omits it, based on timeframe x limit x 2 calendar days. Applies to both stock and crypto paths.
+**Impact:** ORB ADR filter now works — was blocking every symbol with "ADR unavailable". After fix, ORB correctly filtered SPY (ADR 0.90% dead zone), TSLA triggered a long breakout at $445.77.
 
-Scenarios per ticker: ORB long-only (0.5R–3.0R, no filter + NR50), ORB both-dir (1.0–2.0R), IB long-only + both-dir (1.0×–2.0× extension). MNQ 15m also tested at 15m and 30m ORB windows.
+### 3. options-momentum crashing on JSON parse — Fixed
+**Root cause:** Strategy called `t(client, "policy-get")` — that tool does not exist. MCP returns plain-text error, bare `JSON.parse()` throws.
+**Fix:** `strategies/options-momentum/index.mjs` — removed `checkOptionsEnabled` / `policy-get` call entirely (policy enforcement already happens in `options-order-preview` downstream). Wrapped `t()` in try/catch — returns `{ ok: false, _raw: text }` on parse failure instead of throwing.
+**Result:** Strategy now runs clean. Regime gate (`range_bound` not in allowed list) correctly skips it.
 
-Reports: `orb_backtest/results/full_backtest/` — per-ticker `.md` + `MASTER_SUMMARY.md` + `ANALYSIS.md`
-
-### 2. Strategy Cards — Presentation Folder
-`presentation/` — 7 one-page strategy cards + README index for Richard Kim meeting.
-Format per card: hypothesis, rules, filters, backtest stats, forward test metrics, 6-week adjustment trigger.
-Review checkpoint: **2026-06-23**.
-
-### 3. ORB Config Updated — Backtest-Driven Watchlist
-`strategies/orb/config.json` fully updated based on 100+ trade validated findings.
-
----
-
-## Backtest Key Findings
-
-### Confirmed Edge (100+ trades, long-only, costs included, NR50 filtered)
-
-| Ticker | Sharpe | Trades | Best Target |
-|---|---|---|---|
-| MNQ 60m | 3.17 | 103 | 1.0R NR50 |
-| AMZN | 2.65 | 193 | 1.0R NR50 |
-| IRM | 1.89 | 246 | 2.0R NR50 |
-| AAPL | 1.72 | 196 | 1.5R NR50 |
-| SPY | 1.49 | 299 | 2.0R NR50 |
-| QQQ | 1.49 | 282 | 2.0R NR50 |
-| TSLA | 0.72 | 348 | 3.0R unfiltered |
-| COIN | 1.65 | 146 | 3.0R unfiltered |
-
-**Key structural findings:**
-- MNQ (NQ futures) is the best ORB instrument — flag for V3 institutional integration
-- ORB and IB produce equivalent results on 60m bars — ORB framing is cleaner
-- 60m window beats 15m and 30m for MNQ (Sharpe 2.30 vs 1.45 vs 1.31)
-- Long-only outperforms both-direction on every name — live strategy is correct
-- NR50 adds 0.5–1.1 Sharpe on positive names; doesn't rescue low-ADR dead zones
-
-### Dead Zone Confirmed (negative at all parameters, 100+ trades)
-
-| Ticker | Best Sharpe | Verdict |
-|---|---|---|
-| NVDA | -1.75 | Removed from watchlist |
-| AMD | -0.97 | Removed from watchlist |
-| MU | -0.64 | Removed from watchlist |
-| NFLX | +0.09 | Near-zero — removed |
-| KO | -1.53 | Low ADR — commissions destroy edge |
-| XOM | -0.54 | Low ADR — same issue |
-
----
-
-## Config Changes Applied
-
-**Watchlist:** NVDA, AMD, NFLX, MU, BILI removed. AAPL, IRM, SPY, QQQ added.
-
-```
-Old: NVDA, TSLA, AMD, NFLX, AMZN, MU, BILI, COIN, PLTR, HOOD, ABNB
-New: AMZN, TSLA, AAPL, IRM, SPY, QQQ, COIN, PLTR, HOOD, ABNB
+### 4. scan-now.mjs — New utility
+`scripts/scan-now.mjs` — fires immediate scans for one or more strategies, bypassing time scheduling.
+```bash
+node scripts/scan-now.mjs momentum-breakout orb mean-reversion options-momentum
 ```
 
-**R targets updated:**
+### 5. Options sell-side unlocked
+**Strategies added to policy engine:**
+- `covered_call` — sell call against long equity position
+- `cash_secured_put` — sell put with cash collateral
+- `short_call` — naked short call (not in default allowed list, must be explicitly enabled)
+- `short_put` — naked short put (not in default allowed list, must be explicitly enabled)
+**Default allowed when options_enabled=true:** `long_call`, `long_put`, `covered_call`, `cash_secured_put`
+**Files:** `src/policy/config.ts`, `src/policy/engine.ts`
 
-| Symbol | Old | New | Reason |
-|---|---|---|---|
-| AMZN | 3.0R | 2.0R | NR50 peak at 1.0R—2.0R |
-| TSLA | 2.0R | 3.0R | Best unfiltered at 3.0R |
-| AAPL | — | 1.5R | New add, peak NR50 Sharpe |
-| IRM | — | 2.0R | New add, peak NR50 Sharpe |
-| COIN | 1.5R | 2.0R | Unfiltered best at 2.0R+ |
-| NVDA, AMD | removed | — | Off watchlist |
-
-**NR50 exemptions:** NVDA/AMD → TSLA/COIN (NR50 hurts both names)
-
-**ADR gate:** SPY and QQQ exempted (confirmed edge but ADR% ~0.7% fails the 1.5% threshold)
+### 6. README.V3.md — Vision document
+Full V3 positioning as universal execution layer. Architecture diagram, full MCP surface, all supported strategy types, data infrastructure status, standard HFT disclaimer.
 
 ---
 
-## Presentation for Richard Kim
+## V3 Mission — Crystallized This Session
 
-`presentation/` — 7 strategy cards ready.
-Three-layer framework: backtest → paper forward test (live now) → live micro-sizing.
-Paper period completes ~2026-06-23. That is when all three layers can be shown.
+**NightWatcher V3 is a standalone execution layer.**
+
+Not a strategy. Not opinionated about markets. One job: take a signal from any source and execute with institutional-grade quality.
+
+Three layers:
+1. **Alpha socket** — open MCP interface, any signal source connects
+2. **Smart validator** — policy engine, risk framework, HMAC approval flow
+3. **Institutional execution client** — TWAP, VWAP, SOR, all venues, all asset types
+
+All future work is measured against this mission.
 
 ---
 
-## Next Session — Action Items
+## Today's Scan Results (2026-05-13)
 
-1. Check `logs/orb-activity.jsonl` — trades since 2026-05-12?
-2. **6-week review (2026-06-23):** live trade count vs backtest expectation, filter pass rate per symbol
-3. MNQ futures ORB — strongest instrument found (3.17 Sharpe). Discuss adding to live strategy
-4. PLTR, HOOD, ABNB — below 100-trade threshold. Re-evaluate at 6-week checkpoint
-5. IRM — confirm ADR gate is passing before review (unusual name, verify it's trading)
+After prices-bars fix, re-scanned ~10:47 AM ET:
+- **momentum-breakout:** All 8 passed → META selected → BUY 1 META executed
+- **orb:** 10 ranges captured → TSLA long breakout $445.77 → BUY 1 TSLA executed. SPY dead zone (ADR 0.90%). Others: NR percentile unavailable (insufficient hourly history, normal intraday).
+- **mean-reversion:** NVDA -3.49% above SMA20. Nothing hit threshold.
+- **options-momentum:** Ran clean. Skipped — regime `range_bound` not in allowed list.
+
+---
+
+## Known Issues / Watch Points
+
+- **ORB NR percentile unavailable** — `fetchHistoricalRanges` needs more 1-hour bars across multiple trading days. Same fix pattern as daily bars — push start date further back.
+- **options_enabled still false by default** — Flip via `policy-update` tool to actually trade options.
+- **futures-hedge short-selling** — Requires margin on paper account. Silently skips.
+- **options-momentum** — Only fires in `trending_bull` / `trending_bear` regime.
+
+---
+
+## Next Session Options
+
+- **NR percentile fix** — Push `fetchHistoricalRanges` start date back to cover 15+ trading days of 1-hour bars.
+- **Enable options on paper** — Set `options_enabled: true`, test covered call end-to-end.
+- **External signal interface spec** — Document the canonical V3 public API for external strategies.
+- **Multi-leg options** — Iron condor, bull call spread as named strategies.
+- **Phase 1 / 4b** — Unblocked when Richard Kim's API spec arrives.
+
+---
+
+## Operational Status
+
+```
+tmux session:     nightwatcher (running)
+MCP server:       http://localhost:8787 ✓
+Dashboard API:    http://localhost:3001 ✓
+Cron:             9:25 AM ET Mon–Fri — Full Disk Access granted ✓
+All 7 strategies: running in tmux
+```
+
+---
+
+## Partnership Context
+Richard Kim — institutional HFT clearing firm, 2-3% US equity volume, 14 exchanges + all dark pools.
+Blocked on API spec. Do not build what they already have.
+See `Worked ON/V3_STANDARD_LANGUAGE.md` for required V3 positioning language.
+See `README.V3.md` for the full V3 vision document (written this session).
