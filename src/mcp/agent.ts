@@ -1999,6 +1999,192 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         }
       }
     );
+
+    this.server.tool(
+      "options-mleg-preview",
+      "Preview a multi-leg options order (spreads, condors, straddles, etc.) and get an approval token. Does NOT execute. Use options-mleg-submit with the token. Legs must specify position_intent: buy_to_open | buy_to_close | sell_to_open | sell_to_close.",
+      {
+        strategy: z.enum([
+          "bull_call_spread", "bear_put_spread", "bull_put_spread", "bear_call_spread",
+          "long_straddle", "long_strangle", "short_straddle", "short_strangle",
+          "iron_condor", "iron_butterfly", "calendar_spread", "wheel", "zero_dte", "gamma_scalping",
+        ]).describe("Named strategy — used for policy validation and audit trail"),
+        underlying: z.string().min(1).describe("Underlying symbol, e.g. AAPL"),
+        legs: z.array(z.object({
+          symbol: z.string().min(1).describe("Full OCC options contract symbol"),
+          side: z.enum(["buy", "sell"]),
+          ratio_qty: z.number().int().positive().default(1).describe("Relative leg quantity (1 = 1x, 2 = 2x)"),
+          position_intent: z.enum(["buy_to_open", "buy_to_close", "sell_to_open", "sell_to_close"]),
+        })).min(2).max(4).describe("2–4 legs"),
+        qty: z.number().int().positive().describe("Number of spreads/structures"),
+        order_type: z.enum(["market", "limit", "debit", "credit", "even"]).default("limit"),
+        limit_price: z.number().optional().describe("Net debit (+) or credit (−) per spread"),
+        time_in_force: z.enum(["day", "gtc"]).default("day"),
+      },
+      async (input) => {
+        const startTime = Date.now();
+        const db = createD1Client(this.env.DB);
+        const alpaca = createAlpacaProviders(this.env);
+
+        if (!this.options || !this.options.isConfigured()) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.NOT_SUPPORTED, message: "Options provider not configured" }), null, 2) }], isError: true };
+        }
+
+        try {
+          const [clock, riskState] = await Promise.all([
+            alpaca.trading.getClock(),
+            getRiskState(db),
+          ]);
+
+          // Validate options enabled + strategy allowed
+          const violations: import("./types").PolicyViolation[] = [];
+          const warnings: import("./types").PolicyWarning[] = [];
+
+          if (!this.policyConfig!.options.options_enabled) {
+            violations.push({ rule: "options_disabled", message: "Options trading is disabled in policy config", current_value: false, limit_value: true });
+          }
+          if (!this.policyConfig!.options.allowed_strategies.includes(input.strategy as import("../policy/config").OptionsStrategy)) {
+            violations.push({ rule: "options_strategy_not_allowed", message: `Strategy '${input.strategy}' not in allowed list`, current_value: input.strategy, limit_value: this.policyConfig!.options.allowed_strategies });
+          }
+
+          // Market hours
+          if (!clock.is_open && input.time_in_force === "day") {
+            warnings.push({ rule: "market_closed", message: "Market is currently closed — order will queue until open" });
+          }
+
+          // Kill switch
+          if (riskState.kill_switch_active) {
+            violations.push({ rule: "kill_switch", message: riskState.kill_switch_reason ?? "Kill switch active", current_value: true, limit_value: false });
+          }
+
+          // Estimated net cost (positive = debit, negative = credit)
+          const estimatedCost = input.limit_price != null ? input.limit_price * input.qty * 100 : undefined;
+
+          const preview: import("./types").OptionsMlegOrderPreview = {
+            strategy: input.strategy,
+            underlying: input.underlying.toUpperCase(),
+            legs: input.legs as import("./types").MlegLeg[],
+            qty: input.qty,
+            order_type: input.order_type,
+            limit_price: input.limit_price,
+            time_in_force: input.time_in_force,
+            estimated_cost: estimatedCost,
+          };
+
+          const policyResult: import("./types").PolicyResult = {
+            allowed: violations.length === 0,
+            violations,
+            warnings,
+          };
+
+          if (policyResult.allowed) {
+            const approval = await generateApprovalToken({
+              preview: {
+                symbol: `MLEG:${input.underlying.toUpperCase()}:${input.strategy}`,
+                side: "buy",
+                order_type: "market",
+                time_in_force: input.time_in_force,
+                qty: input.qty,
+                mleg_legs: input.legs as import("./types").MlegLeg[],
+                mleg_order_type: input.order_type,
+                mleg_limit_price: input.limit_price,
+                mleg_strategy: input.strategy,
+              },
+              policyResult,
+              secret: this.env.KILL_SWITCH_SECRET,
+              db,
+              ttlSeconds: this.policyConfig!.approval_token_ttl_seconds,
+            });
+            policyResult.approval_token = approval.token;
+            policyResult.approval_id = approval.approval_id;
+            policyResult.expires_at = approval.expires_at;
+          }
+
+          const result = success({ preview, policy: policyResult });
+
+          await insertToolLog(db, {
+            request_id: this.requestId,
+            tool_name: "options-mleg-preview",
+            input: { strategy: input.strategy, underlying: input.underlying, legs: input.legs, qty: input.qty },
+            output: result,
+            latency_ms: Date.now() - startTime,
+            provider_calls: 4,
+          });
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "options-mleg-submit",
+      "Execute a multi-leg options order with a valid approval token from options-mleg-preview",
+      { approval_token: z.string().min(1) },
+      async ({ approval_token }) => {
+        const startTime = Date.now();
+        const db = createD1Client(this.env.DB);
+        const alpaca = createAlpacaProviders(this.env);
+
+        try {
+          const riskState = await getRiskState(db);
+          if (riskState.kill_switch_active) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.KILL_SWITCH_ACTIVE, message: riskState.kill_switch_reason ?? "Kill switch active" }), null, 2) }], isError: true };
+          }
+
+          const validation = await validateApprovalToken({ token: approval_token, secret: this.env.KILL_SWITCH_SECRET, db });
+          if (!validation.valid) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_APPROVAL_TOKEN, message: validation.reason ?? "Invalid token" }), null, 2) }], isError: true };
+          }
+
+          const orderParams = validation.order_params!;
+          const clock = await alpaca.trading.getClock();
+          if (!clock.is_open && orderParams.time_in_force === "day") {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.MARKET_CLOSED, message: "Market closed" }), null, 2) }], isError: true };
+          }
+
+          if (!orderParams.mleg_legs?.length) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "Token is not for a multi-leg order — use options-order-submit instead" }), null, 2) }], isError: true };
+          }
+
+          const order = await alpaca.trading.createMlegOrder({
+            legs: orderParams.mleg_legs as Array<{ symbol: string; side: "buy" | "sell"; ratio_qty: number; position_intent: string }>,
+            qty: orderParams.qty ?? 1,
+            order_type: (orderParams.mleg_order_type ?? "limit") as "market" | "limit" | "debit" | "credit" | "even",
+            limit_price: orderParams.mleg_limit_price,
+            time_in_force: orderParams.time_in_force as "day" | "gtc",
+            client_order_id: validation.approval_id,
+          });
+
+          await consumeApprovalToken(db, validation.approval_id!);
+          await createTrade(db, {
+            approval_id: validation.approval_id,
+            alpaca_order_id: order.id,
+            symbol: order.symbol,
+            side: order.side,
+            qty: order.qty ? parseFloat(order.qty) : undefined,
+            order_type: order.type,
+            status: order.status,
+          });
+
+          const result = success({ message: "Multi-leg options order submitted", order: { id: order.id, symbol: order.symbol, status: order.status } });
+
+          await insertToolLog(db, {
+            request_id: this.requestId,
+            tool_name: "options-mleg-submit",
+            input: { approval_token: "[REDACTED]" },
+            output: result,
+            latency_ms: Date.now() - startTime,
+            provider_calls: 3,
+          });
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
   }
 
   private parseOptionsSymbol(symbol: string): { underlying: string; expiration: string; type: "call" | "put"; strike: number } | null {

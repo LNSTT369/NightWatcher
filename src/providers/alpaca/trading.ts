@@ -205,6 +205,31 @@ export class AlpacaTradingProvider implements BrokerProvider {
     return this.client.tradingRequest<Order>("POST", "/v2/orders", body);
   }
 
+  async createMlegOrder(params: {
+    legs: Array<{ symbol: string; side: "buy" | "sell"; ratio_qty: number; position_intent: string }>;
+    qty: number;
+    order_type: "market" | "limit" | "debit" | "credit" | "even";
+    limit_price?: number;
+    time_in_force: "day" | "gtc";
+    client_order_id?: string;
+  }): Promise<Order> {
+    const body: Record<string, unknown> = {
+      type: "mleg",
+      order_class: "mleg",
+      qty: String(params.qty),
+      time_in_force: params.time_in_force,
+      legs: params.legs.map(l => ({
+        symbol: l.symbol,
+        side: l.side,
+        ratio_qty: String(l.ratio_qty),
+        position_intent: l.position_intent,
+      })),
+    };
+    if (params.limit_price !== undefined) body.limit_price = String(params.limit_price);
+    if (params.client_order_id !== undefined) body.client_order_id = params.client_order_id;
+    return this.client.tradingRequest<Order>("POST", "/v2/orders", body);
+  }
+
   async getOrder(orderId: string): Promise<Order> {
     return this.client.tradingRequest<Order>(
       "GET",

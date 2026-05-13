@@ -47,6 +47,11 @@ export interface OrderPreview {
   estimated_price?: number;
   estimated_cost?: number;
   buying_power_impact?: number;
+  // Multi-leg fields (present only for mleg orders)
+  mleg_legs?: MlegLeg[];
+  mleg_order_type?: "market" | "limit" | "debit" | "credit" | "even";
+  mleg_limit_price?: number;
+  mleg_strategy?: string;
 }
 
 export interface OptionsOrderPreview {
@@ -74,6 +79,24 @@ export interface OptionsPolicyResult {
   approval_token?: string;
   approval_id?: string;
   expires_at?: string;
+}
+
+export interface MlegLeg {
+  symbol: string;          // options contract symbol (e.g. AAPL250117C00200000)
+  side: "buy" | "sell";
+  ratio_qty: number;       // relative quantity (1 = 1x, 2 = 2x)
+  position_intent: "buy_to_open" | "buy_to_close" | "sell_to_open" | "sell_to_close";
+}
+
+export interface OptionsMlegOrderPreview {
+  strategy: string;        // e.g. "iron_condor", "bull_call_spread"
+  underlying: string;
+  legs: MlegLeg[];
+  qty: number;             // number of spreads/contracts
+  order_type: "market" | "limit" | "debit" | "credit" | "even";
+  limit_price?: number;    // net debit (positive) or credit (negative)
+  time_in_force: "day" | "gtc";
+  estimated_cost?: number; // net debit × qty × 100 (positive = pay, negative = receive)
 }
 
 export type EventType =

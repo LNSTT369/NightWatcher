@@ -1,13 +1,33 @@
 import { parseNumber } from "../lib/utils";
 import type { Env } from "../env.d";
 
-export type OptionsStrategy =
+// Single-leg strategies
+export type SingleLegStrategy =
   | "long_call"
   | "long_put"
   | "covered_call"
   | "cash_secured_put"
   | "short_call"
   | "short_put";
+
+// Multi-leg strategies (require options-mleg-preview / options-mleg-submit)
+export type MultiLegStrategy =
+  | "bull_call_spread"
+  | "bear_put_spread"
+  | "bull_put_spread"
+  | "bear_call_spread"
+  | "long_straddle"
+  | "long_strangle"
+  | "short_straddle"
+  | "short_strangle"
+  | "iron_condor"
+  | "iron_butterfly"
+  | "calendar_spread"
+  | "wheel"
+  | "zero_dte"
+  | "gamma_scalping";
+
+export type OptionsStrategy = SingleLegStrategy | MultiLegStrategy;
 
 export interface OptionsPolicyConfig {
   /** Enable options trading (default: false) */
@@ -63,7 +83,14 @@ export function getDefaultOptionsPolicyConfig(): OptionsPolicyConfig {
     max_dte: 60,
     min_delta: 0.30,
     max_delta: 0.70,
-    allowed_strategies: ["long_call", "long_put", "covered_call", "cash_secured_put"],
+    allowed_strategies: [
+      // Single-leg
+      "long_call", "long_put", "covered_call", "cash_secured_put", "short_call", "short_put",
+      // Multi-leg
+      "bull_call_spread", "bear_put_spread", "bull_put_spread", "bear_call_spread",
+      "long_straddle", "long_strangle", "short_straddle", "short_strangle",
+      "iron_condor", "iron_butterfly", "calendar_spread", "wheel", "zero_dte", "gamma_scalping",
+    ],
     no_averaging_down: true,
     max_option_positions: 3,
     min_confidence_for_options: 0.80,
@@ -126,7 +153,12 @@ export function validateOptionsPolicyConfig(config: unknown): OptionsPolicyConfi
     throw new Error("options.max_delta must be greater than min_delta");
   }
 
-  const validStrategies: OptionsStrategy[] = ["long_call", "long_put", "covered_call", "cash_secured_put", "short_call", "short_put"];
+  const validStrategies: OptionsStrategy[] = [
+    "long_call", "long_put", "covered_call", "cash_secured_put", "short_call", "short_put",
+    "bull_call_spread", "bear_put_spread", "bull_put_spread", "bear_call_spread",
+    "long_straddle", "long_strangle", "short_straddle", "short_strangle",
+    "iron_condor", "iron_butterfly", "calendar_spread", "wheel", "zero_dte", "gamma_scalping",
+  ];
   if (!Array.isArray(c.allowed_strategies) || c.allowed_strategies.length === 0) {
     throw new Error("options.allowed_strategies must be a non-empty array");
   }
