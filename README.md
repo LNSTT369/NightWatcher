@@ -214,8 +214,6 @@ src/
 
 This software is for **educational and informational purposes only.** Nothing in this repository constitutes financial, investment, legal, or tax advice. All trading decisions are made at your own risk. Markets are volatile — you can lose some or all of your capital. The authors are not responsible for any financial losses resulting from use of this software. Always start with `ALPACA_PAPER=true` and never risk money you cannot afford to lose.
 
-**[Join Discord](https://discord.gg/Ys8KpsW5NN)**
-
 ---
 
 <sup>MIT License</sup>
