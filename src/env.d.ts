@@ -15,6 +15,7 @@ export interface Env {
   LLM_PROVIDER?: string;       // "openai" | "gemini" | "ollama" — explicit provider selection
   TWITTER_BEARER_TOKEN?: string;
   KILL_SWITCH_SECRET: string;
+  SIGNAL_API_KEY?: string;
 
   ENVIRONMENT: string;
   FEATURE_LLM_RESEARCH: string;

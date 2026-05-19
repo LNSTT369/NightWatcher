@@ -1,367 +1,221 @@
-⚠️ **Warning:** This software is provided for educational and informational purposes only. Nothing in this repository constitutes financial, investment, legal, or tax advice.
+<div align="center">
+  <picture>
+    <img src="diagram.svg" width="100%" alt="NightWatcher V3 Architecture" />
+  </picture>
+</div>
 
+<br>
 
+<div align="center">
 
+# NIGHTWATCHER V3
 
-# NIGHTWATCHER
+**Universal execution layer for autonomous trading.**<br>
+Any strategy · Any language · One signal call.
 
-An autonomous, multi-agent AI trading system that marries the speed of algorithmic execution with the hyper-logical intuition of a fundamental analyst. 
+<br>
 
-Nightwatcher actively reasons about *why* the market is moving before deploying capital. It pulls trending signals from StockTwits, validates them against real-time fundamental news using an LLM Catalyst Filter to drop retail noise, and autonomously executes high-conviction trades 24/7 through Alpaca.
+`TypeScript` &nbsp;·&nbsp; `Cloudflare Workers` &nbsp;·&nbsp; `Durable Object` &nbsp;·&nbsp; `MCP` &nbsp;·&nbsp; `Alpaca`
 
-<img width="1278" height="957" alt="dashboard" src="assets/NightWatcher Screenshot.jpg" />
+</div>
 
+---
 
-## Features
+## INTERFACES
 
-- **The "Brain" (LLM Catalyst Validator)** — Automatically drops lagging "retail noise" by confirming hard fundamental catalysts (e.g., earnings) in real-time.
-- **The "Eyes" (24/7 Sentinel)** — Scrapes StockTwits for extreme volume spikes and crypto momentum while you sleep.
-- **The "Hands" (Institutional Execution)** — Zero-latency programmatic market orders executed natively on the Alpaca API.
-- **Unified Trading Pipelines** — Seamlessly pivots between equities during market hours and crypto (`BTC`, `ETH`, `SOL`) overnight.
-- **Glassmorphic Dashboard** — Apple-tier visualization of active signals, real-time portfolio performance, and live agent activity streams.
-- **Overnight Activity Monitor** — Aggregates overnight metrics natively so you can see exactly how many signals the agent gathered and researched while away.
-- **Programmatic Risk Management** — Hard-coded max position sizing, daily loss guardrails, and automated take-profit rules.
+Three ways to route a signal into the execution layer.
 
-## Requirements
+| Interface | Endpoint | Best For |
+|---|---|---|
+| REST | `POST /api/signal` | Scripts, services, webhooks — one HTTP call, no MCP client |
+| WebSocket | `/stream` | Streaming sources, high-frequency signal feeds |
+| MCP | `signal-submit` | LLM agents with access to the full ~50-tool interface |
 
-- Node.js 18+
-- Alpaca account (free, paper trading supported)
-- OpenAI API key (required for agentic features)
+Authentication for REST and WebSocket is optional. Set `SIGNAL_API_KEY` to require a Bearer token.
 
-## Quick Start
+---
 
-### 1. Clone and install
+## EXECUTION FLOW
+
+Every trade follows a mandatory two-step path enforced in code. No token, no execution.
+
+```
+orders-preview
+  └─ validates against PolicyEngine (14 checks)
+  └─ generates HMAC-signed approval token (5-min TTL → D1)
+  └─ returns token on pass, error with reason on fail
+
+orders-submit
+  └─ verifies token (not expired · not used)
+  └─ re-checks kill switch
+  └─ calls Alpaca API
+  └─ records trade in D1
+```
+
+**Submit a signal via REST:**
+
+```bash
+curl -X POST http://localhost:8787/api/signal \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "external",
+    "symbol": "AAPL",
+    "direction": "long",
+    "confidence": 0.80,
+    "urgency": "session",
+    "horizon": 60,
+    "rationale": "Breakout above VWAP with volume confirmation"
+  }'
+```
+
+---
+
+## QUICK START
+
+**1. Clone and install**
 
 ```bash
 git clone https://github.com/ygwyg/NIGHTWATCHER.git
-cd nightwatcher
+cd "NIGHTWATCHER V2"
 npm install
-cd dashboard && npm install && cd ..
 ```
 
-### 2. Configure API keys
-
-Create a `.dev.vars` file in the project root:
+**2. Configure secrets**
 
 ```bash
-ALPACA_API_KEY=your_alpaca_key
-ALPACA_API_SECRET=your_alpaca_secret
-ALPACA_PAPER=true
-OPENAI_API_KEY=your_openai_key
-KILL_SWITCH_SECRET=any_random_string_here
+cp .env.example .dev.vars
 ```
 
-> **Important**: Always start with `ALPACA_PAPER=true` until you understand how the system works.
+```bash
+# .dev.vars — required
+ALPACA_API_KEY=your_key
+ALPACA_API_SECRET=your_secret
+ALPACA_PAPER=true
+KILL_SWITCH_SECRET=any_random_string
 
-### 3. Initialize the database
+# optional
+OPENAI_API_KEY=sk-...       # enables LLM tools
+SIGNAL_API_KEY=...          # adds auth to /api/signal and /stream
+```
+
+**3. Provision Cloudflare resources**
+
+```bash
+wrangler d1 create nightwatcher-db
+wrangler kv:namespace create CACHE
+# paste the returned IDs into wrangler.toml
+```
+
+**4. Migrate and run**
 
 ```bash
 npm run db:migrate
+npm run dev              # http://localhost:8787
 ```
 
-### 4. Start the MCP server
+---
 
-```bash
-npm run dev
-```
+## POLICY ENGINE
 
-The server runs at `http://localhost:8787`
+14 checks run on every `orders-preview` call. Any failure returns a structured error — no token is issued.
 
-### 5. Start the trading agent
+| Check | Default |
+|---|---|
+| Kill switch | blocks immediately if active |
+| Loss cooldown | 30 min pause after any realized loss |
+| Daily loss limit | 2% of account equity |
+| Market hours | NYSE regular session only |
+| Symbol allow / deny list | configurable |
+| Order type restrictions | configurable |
+| Notional cap per trade | $2,000 |
+| Position size % of equity | 10% |
+| Max open positions | 5 |
+| Short-selling | disabled |
+| Buying power | real-time Alpaca check |
+| Options DTE | ≥ 7 days |
+| Options delta | configurable range |
+| Options exposure | max % of equity |
 
-In a new terminal:
+Override any default via D1 (persisted across restarts) or `wrangler.toml [vars]` (boot-time defaults).
 
-```bash
-node agent.mjs
-```
+---
 
-### 6. Start the dashboard (optional)
+## STORAGE
 
-In a new terminal:
+| Layer | Binding | Contents |
+|---|---|---|
+| D1 | `DB` | trades · approvals · alpha\_signals · policy config · risk state · journal · tool logs |
+| KV | `CACHE` | hot reads · market state · counterparty signal weights |
+| R2 | `ARTIFACTS` | research reports · backtest results · large payloads |
 
-```bash
-cd dashboard
-npm run dev
-```
+---
 
-Open `http://localhost:5173` in your browser.
+## CRON
 
-## Getting API Keys
+| Schedule | Job |
+|---|---|
+| `*/5 13-20 * * 1-5` | SEC EDGAR event ingestion (market hours) |
+| `0 14 * * 1-5` | Market open prep · cleanup expired approvals |
+| `30 21 * * 1-5` | Market close cleanup |
+| `0 5 * * *` | Midnight reset — daily loss counter |
+| `0 * * * *` | Hourly cache refresh |
 
-### Alpaca (Required)
+---
 
-1. Create a free account at [alpaca.markets](https://alpaca.markets)
-2. Go to **Paper Trading** > **API Keys**
-3. Click **Generate New Keys**
-4. Copy both the key and secret
+## CONFIGURATION
 
-> Start with paper trading. Switch to live only after thorough testing.
+| Variable | Default | Description |
+|---|---|---|
+| `DEFAULT_MAX_POSITION_PCT` | `0.10` | Max position as % of equity |
+| `DEFAULT_MAX_NOTIONAL_PER_TRADE` | `2000` | Hard notional cap per order ($) |
+| `DEFAULT_MAX_DAILY_LOSS_PCT` | `0.02` | Daily loss limit |
+| `DEFAULT_COOLDOWN_MINUTES` | `30` | Cooldown after a loss |
+| `DEFAULT_MAX_OPEN_POSITIONS` | `5` | Max concurrent open positions |
+| `DEFAULT_APPROVAL_TTL_SECONDS` | `300` | Approval token lifetime |
+| `ALPACA_PAPER` | `true` | Paper trading mode — set `false` for live |
+| `LLM_PROVIDER` | — | `openai` · `gemini` · `ollama` |
+| `FEATURE_LLM_RESEARCH` | `false` | Enable LLM-powered tools |
+| `FEATURE_OPTIONS` | `false` | Enable options trading |
 
-### OpenAI (Required)
+---
 
-The agent uses OpenAI for signal analysis and position management:
-
-1. Create an account at [platform.openai.com](https://platform.openai.com)
-2. Add billing and credits ($10 is plenty to start)
-3. Go to **API Keys** > **Create new secret key**
-4. Add to `.dev.vars`: `OPENAI_API_KEY=sk-your_key`
-
-**Estimated costs**: ~$0.50-2/day depending on trading activity (using gpt-4o-mini)
-
-## Configuration
-
-Edit `nightwatcher-config.json` (created on first run) or use the dashboard:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `max_positions` | 3 | Maximum stocks to hold at once |
-| `max_position_value` | 2000 | Maximum $ per position |
-| `take_profit_pct` | 8 | Auto-sell at this % profit |
-| `stop_loss_pct` | 4 | Auto-sell at this % loss |
-| `min_sentiment_score` | 0.3 | Minimum bullish sentiment to consider |
-| `min_analyst_confidence` | 0.6 | Minimum LLM confidence to trade |
-| `min_volume` | 10 | Minimum message volume to consider |
-| `position_size_pct_of_cash` | 20 | Max % of cash per position |
-| `llm_model` | gpt-4o-mini | OpenAI model for analysis |
-
-## How It Works
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         AGENT (agent.mjs)                    │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐     ┌─────────────────────────────────┐    │
-│  │   StockTwits    │     │       LLM Analysis (OpenAI)     │    │
-│  │   Sentiment     │────▶│  • Signal research              │    │
-│  │                 │     │  • Position management          │    │
-│  └─────────────────┘     │  • Buy/sell decisions           │    │
-│                          └──────────────┬──────────────────┘    │
-└─────────────────────────────────────────┼───────────────────────┘
-                                          │
-                                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    MCP SERVER (Cloudflare Workers)              │
-├─────────────────────────────────────────────────────────────────┤
-│  Policy Engine → Approval Tokens → Order Execution              │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │   Alpaca    │
-                    │   Broker    │
-                    └─────────────┘
-```
-
-### Agentic Loop
-
-**Data Gathering (runs 24/7)**
-- Fetches trending stocks from StockTwits
-- Calculates sentiment score (bullish vs bearish messages)
-- LLM researches top signals: analyzes if sentiment is real, looks for red flags
-
-**Trading Loop (market hours only)**
-- Checks existing positions against stop-loss/take-profit rules
-- LLM analyzes each position: should we hold or sell?
-- LLM evaluates buy opportunities from researched signals
-- Executes trades through MCP server
-
-### LLM Decision Making
-
-The agent uses OpenAI for two key decisions:
-
-**Signal Research** - For each trending stock:
-```
-Is the sentiment justified? Is it too late? Any red flags?
-→ Returns: BUY / SKIP / WAIT with confidence score
-```
-
-**Position Analysis** - For each held position:
-```
-Is sentiment still supportive? Signs of exhaustion?
-→ Returns: HOLD / SELL with reasoning
-```
-
-Only BUY signals with confidence >= `min_analyst_confidence` (default 0.6) are executed.
-
-### Order Flow (Two-Step Safety)
-
-All orders go through a two-step process:
-
-1. **Preview** (`orders-preview`) - Validates against policy, returns approval token
-2. **Submit** (`orders-submit`) - Executes with valid token
-
-This prevents accidental trades and enforces risk limits.
-
-## Safety Features
-
-| Feature | Description |
-|---------|-------------|
-| Paper Trading | Default mode - no real money at risk |
-| Kill Switch | Emergency halt for all trading |
-| Position Limits | Max positions and $ per position |
-| Daily Loss Limit | Stops trading after 2% daily loss |
-| Cooldown Period | 30-minute pause after losses |
-| Approval Tokens | Orders expire after 5 minutes |
-| LLM Confidence Gate | Trades require minimum confidence |
-| No Margin | Cash-only trading |
-| No Shorting | Long positions only |
-
-## Estimated Costs
-
-### API Costs
-
-| Service | Cost | Notes |
-|---------|------|-------|
-| StockTwits | Free | No API key required |
-| Alpaca (paper) | Free | Practice trading |
-| Alpaca (live) | Free | Commission-free stocks |
-| OpenAI | ~$0.50-2/day | Using gpt-4o-mini |
-
-The dashboard shows real-time LLM cost tracking.
-
-## Project Structure
+## PROJECT STRUCTURE
 
 ```
-nightwatcher/
-├── agent.mjs              # Trading agent - COPY AND MODIFY THIS
-├── .dev.vars                 # API keys (DO NOT COMMIT)
-├── nightwatcher-config.json         # Runtime config (DO NOT COMMIT)
-├── nightwatcher-logs.json           # Activity logs (DO NOT COMMIT)
-├── wrangler.toml             # Cloudflare Workers config
-├── package.json
-│
-├── src/                      # MCP Server
-│   ├── index.ts              # Entry point
-│   ├── durable-objects/
-│   │   └── trading-agent.ts  # DO version of agent (optional)
-│   ├── mcp/
-│   │   └── agent.ts          # MCP tool definitions
-│   ├── policy/
-│   │   ├── engine.ts         # Trade validation logic
-│   │   ├── config.ts         # Policy configuration
-│   │   └── approval.ts       # Token generation/validation
-│   ├── providers/
-│   │   ├── alpaca/           # Alpaca API client
-│   │   ├── llm/              # OpenAI integration
-│   │   └── technicals.ts     # Technical indicators
-│   └── storage/
-│       └── d1/               # Database queries
-│
-├── dashboard/                # React dashboard
-│   ├── src/
-│   │   ├── App.tsx           # Main dashboard
-│   │   └── components/
-│   └── package.json
-│
-└── migrations/               # Database migrations
+src/
+├── index.ts                    # Worker entry · route dispatch
+├── env.d.ts                    # Cloudflare bindings + secrets
+├── api/
+│   └── signal.ts               # POST /api/signal · GET /api/signal/:id
+├── mcp/
+│   └── agent.ts                # NightwatcherMcpAgent · ~50 MCP tools
+├── policy/
+│   ├── engine.ts               # PolicyEngine · 14 pre-trade checks
+│   ├── config.ts               # PolicyConfig + D1 override loader
+│   └── approval.ts             # HMAC token generation + verification
+├── signals/
+│   └── types.ts                # AlphaSignal · AggregatedSignal · SOURCE_WEIGHTS
+├── stream/
+│   └── handler.ts              # WebSocket /stream handler
+├── storage/
+│   ├── d1/                     # Per-table D1 query files
+│   ├── kv/                     # KV cache helpers
+│   └── r2/                     # R2 artifact helpers
+├── providers/
+│   ├── alpaca/                 # Alpaca REST + streaming client
+│   └── llm/                    # OpenAI · Gemini · Ollama adapters
+└── jobs/
+    └── cron.ts                 # Scheduled event handlers
 ```
 
-## Troubleshooting
+---
 
-### "Failed to connect to MCP server"
+## DISCLAIMER
 
-Make sure the MCP server is running:
-```bash
-npm run dev
-```
+This software is for **educational and informational purposes only.** Nothing in this repository constitutes financial, investment, legal, or tax advice. All trading decisions are made at your own risk. Markets are volatile — you can lose some or all of your capital. The authors are not responsible for any financial losses resulting from use of this software. Always start with `ALPACA_PAPER=true` and never risk money you cannot afford to lose.
 
-### "Invalid API key"
+**[Join Discord](https://discord.gg/Ys8KpsW5NN)**
 
-Check your `.dev.vars` file has correct Alpaca and OpenAI keys.
+---
 
-### "Market is closed"
-
-The agent only trades during market hours (9:30 AM - 4:00 PM ET, Mon-Fri). It gathers data 24/7 but won't execute trades when markets are closed.
-
-### Agent not making trades
-
-1. Check `min_analyst_confidence` - LLM might not be confident enough (try 0.5)
-2. Check `min_sentiment_score` - might be too high (try 0.2)
-3. Check `max_positions` - might already be at limit
-4. Check research results in dashboard - see what the LLM is thinking
-5. Check logs in dashboard or `nightwatcher-logs.json`
-
-### High OpenAI costs
-
-1. Reduce polling frequency: increase `data_poll_interval_ms`
-2. Use cheaper model: set `llm_model` to `gpt-4o-mini`
-3. The dashboard shows real-time cost tracking
-
-## Extending the Agent
-
-**Copy `agent.mjs` and modify it.** The file has clearly marked sections:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  SECTION 1: DATA SOURCE (customize this)                        │
-│  - StockTwitsAgent class                                        │
-│  - Add your own: news APIs, custom signals, etc.                │
-├─────────────────────────────────────────────────────────────────┤
-│  SECTION 2: TRADING STRATEGY (customize this)                   │
-│  - runTradingLogic() method                                     │
-│  - Change buy/sell rules, add technical indicators, etc.        │
-├─────────────────────────────────────────────────────────────────┤
-│  SECTION 3: HARNESS (probably don't touch)                      │
-│  - MCP connection, execution, dashboard API                     │
-│  - Modify only if you know what you're doing                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Available MCP Tools
-
-The MCP server provides these tools for your agents:
-
-| Tool | Description |
-|------|-------------|
-| `accounts-get` | Get account balance and status |
-| `positions-list` | List current positions |
-| `positions-close` | Close a position |
-| `orders-preview` | Preview order and get approval token |
-| `orders-submit` | Submit approved order |
-| `orders-list` | List recent orders |
-| `market-clock` | Check if market is open |
-| `market-quote` | Get stock quote |
-| `technicals-get` | Get technical indicators (RSI, MACD, etc.) |
-| `catalog-list` | List all available tools |
-
-### Ideas for Extension
-
-1. **Add more data sources**: News APIs, SEC filings, custom signals
-2. **Enhance LLM prompts**: Add technical analysis, fundamentals, news context
-3. **Multi-source confirmation**: Require 2+ sources to agree before trading
-4. **Options trading**: The MCP server supports options via Alpaca
-5. **Custom indicators**: Use the `technicals-get` MCP tool
-
-## Community
-
-Join our Discord for help, discussion, and sharing strategies:
-
-**[Discord Server](https://discord.gg/Ys8KpsW5NN)**
-
-## Disclaimer
-
-**⚠️ IMPORTANT: READ BEFORE USING**
-
-This software is provided for **educational and informational purposes only**. Nothing in this repository constitutes financial, investment, legal, or tax advice.
-
-**By using this software, you acknowledge and agree that:**
-
-- All trading and investment decisions are made **at your own risk**
-- Markets are volatile and **you can lose some or all of your capital**
-- No guarantees of performance, profits, or outcomes are made
-- The authors, contributors, and maintainers are **not responsible** for any financial losses, damages, or other consequences resulting from the use of this software
-- You are **solely responsible** for your own trades and investment decisions
-- This software may contain bugs, errors, or behave unexpectedly
-- Past performance (real or simulated) does not guarantee future results
-
-**If you do not fully understand the risks involved in trading or investing, you should not use this software.**
-
-No member, contributor, or operator of this project shall be held liable for losses of any kind. This software is provided "as is" without warranty of any kind, express or implied.
-
-**Always start with paper trading (`ALPACA_PAPER=true`) and never risk money you cannot afford to lose.**
-
-## License
-
-MIT License - Free for personal and commercial use. See [LICENSE](LICENSE) for full terms.
+<sup>MIT License</sup>

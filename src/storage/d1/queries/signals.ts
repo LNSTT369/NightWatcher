@@ -168,6 +168,58 @@ export async function insertAggregatedSignal(
   return id;
 }
 
+export async function getSignalById(
+  db: D1Client,
+  id: string
+): Promise<(AlphaSignal & { status: string; expires_at: string }) | null> {
+  type FullSignalRow = {
+    id: string;
+    source: string;
+    symbol: string;
+    asset_class: string;
+    direction: string;
+    confidence: number;
+    urgency: string;
+    horizon_mins: number;
+    suggested_notional: number | null;
+    suggested_pct_equity: number | null;
+    rationale: string;
+    regime_tags: string;
+    supporting_data: string;
+    generated_at: string;
+    ttl_seconds: number;
+    status: string;
+    expires_at: string;
+  };
+
+  const row = await db.executeOne<FullSignalRow>(
+    `SELECT * FROM alpha_signals WHERE id = ?`,
+    [id]
+  );
+
+  if (!row) return null;
+
+  return {
+    signal_id: row.id,
+    source: row.source as AlphaSignal["source"],
+    symbol: row.symbol,
+    asset_class: row.asset_class as AlphaSignal["asset_class"],
+    direction: row.direction as AlphaSignal["direction"],
+    confidence: row.confidence,
+    urgency: row.urgency as AlphaSignal["urgency"],
+    horizon: row.horizon_mins,
+    suggested_notional: row.suggested_notional ?? undefined,
+    suggested_pct_equity: row.suggested_pct_equity ?? undefined,
+    rationale: row.rationale,
+    regime_tags: JSON.parse(row.regime_tags) as string[],
+    supporting_data: JSON.parse(row.supporting_data) as Record<string, unknown>,
+    generated_at: row.generated_at,
+    ttl_seconds: row.ttl_seconds,
+    status: row.status,
+    expires_at: row.expires_at,
+  };
+}
+
 export async function cleanupExpiredSignals(db: D1Client): Promise<number> {
   const now = nowISO();
   await db.run(

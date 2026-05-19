@@ -19,6 +19,17 @@ type StreamOutbound =
   | { type: "error"; message: string };
 
 export function handleStreamConnection(request: Request, env: Env): Response {
+  if (env.SIGNAL_API_KEY) {
+    const auth = request.headers.get("Authorization");
+    const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
+    if (token !== env.SIGNAL_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: "UNAUTHORIZED", message: "Invalid or missing Bearer token" }),
+        { status: 401, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
   const upgrade = request.headers.get("Upgrade");
   if (upgrade !== "websocket") {
     return new Response(
