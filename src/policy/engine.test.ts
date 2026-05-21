@@ -926,4 +926,102 @@ describe("PolicyEngine Quantitative risk (Kelly & VaR)", () => {
     expect(res.allowed).toBe(false);
     expect(res.violations[0]!.rule).toBe("var_limit_exceeded");
   });
+
+  it("should return KellySuggestedSize recommendations on BUY intents, degrading gracefully with no history", () => {
+    const config = createMockConfig();
+    const engine = new PolicyEngine(config);
+
+    const intent: TradeIntent = {
+      symbol: "AAPL",
+      side: "buy",
+      qty: 10,
+      limit_price: 150,
+      order_type: "limit",
+      time_in_force: "day",
+    };
+
+    const ctx: PolicyContext = {
+      intent,
+      account: createMockAccount({ equity: 100000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    };
+
+    // Case 1: No history (kellyResult = undefined)
+    const resNoHist = engine.evaluate(ctx);
+    expect(resNoHist.kelly_suggested_size).toBeDefined();
+    expect(resNoHist.kelly_suggested_size!.skipped_due_to_no_history).toBe(true);
+    expect(resNoHist.kelly_suggested_size!.recommended_pct_equity).toBe(config.max_position_pct_equity * 100);
+
+    // Case 2: With history (kellyResult defined)
+    const ctxWithHist: PolicyContext = {
+      ...ctx,
+      kellyResult: {
+        kelly_fraction: 0.22,
+        recommended_pct_equity: 5.5,
+        win_rate: 0.6,
+        avg_win_pct: 0.12,
+        avg_loss_pct: 0.08,
+        odds_ratio: 1.5,
+        edge: 0.1,
+        is_positive_edge: true,
+      },
+    };
+    const resWithHist = engine.evaluate(ctxWithHist);
+    expect(resWithHist.kelly_suggested_size).toBeDefined();
+    expect(resWithHist.kelly_suggested_size!.skipped_due_to_no_history).toBe(false);
+    expect(resWithHist.kelly_suggested_size!.recommended_pct_equity).toBe(5.5);
+    expect(resWithHist.kelly_suggested_size!.recommended_notional).toBe(5500); // 5.5% of 100,000 equity
+  });
+
+  it("should enforce the confidence threshold override when a fresh regime is provided", () => {
+    const config = createMockConfig();
+    const engine = new PolicyEngine(config);
+
+    const intent: TradeIntent = {
+      symbol: "AAPL",
+      side: "buy",
+      qty: 5,
+      limit_price: 150,
+      order_type: "limit",
+      time_in_force: "day",
+      signal_confidence: 0.45, // below 0.85 threshold
+    };
+
+    const ctx: PolicyContext = {
+      intent,
+      account: createMockAccount({ equity: 100000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+      latestRegime: {
+        regime: "crisis",
+        confidence: 0.90,
+        detected_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 60000).toISOString(), // active/fresh
+        spy_return_20d: -0.05,
+        adx: 35,
+        atr_pct: 0.02,
+        realized_vol_20d: 0.28,
+        confidence_threshold_override: 0.85,
+        position_size_multiplier: 0.25,
+        signal_ttl_override_seconds: 30,
+      },
+    };
+
+    // Case 1: Confidence is 0.45, threshold override is 0.85 -> blocked
+    const resBlocked = engine.evaluate(ctx);
+    expect(resBlocked.allowed).toBe(false);
+    expect(resBlocked.violations.some(v => v.rule === "confidence_threshold_violation")).toBe(true);
+
+    // Case 2: Confidence is 0.90, threshold override is 0.85 -> allowed
+    const intentAllowed: TradeIntent = {
+      ...intent,
+      signal_confidence: 0.90,
+    };
+    const resAllowed = engine.evaluate({ ...ctx, intent: intentAllowed });
+    expect(resAllowed.violations.some(v => v.rule === "confidence_threshold_violation")).toBe(false);
+  });
 });
+

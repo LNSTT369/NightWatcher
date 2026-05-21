@@ -13,6 +13,7 @@ import type { TradeIntent } from "./contract";
 import type { KellyResult } from "../risk/kelly";
 import type { VaRResult } from "../risk/var";
 import type { CorrelationResult } from "../risk/correlation";
+import type { RegimeState } from "../regime/types";
 
 export interface PolicyContext {
   order?: OrderPreview; // Backwards-compatibility
@@ -26,6 +27,7 @@ export interface PolicyContext {
   kellyResult?: KellyResult;
   varResult?: VaRResult;
   correlationResults?: CorrelationResult[];
+  latestRegime?: RegimeState | null;
 }
 
 export class PolicyEngine {
@@ -62,13 +64,45 @@ export class PolicyEngine {
     }
 
     // Quant bounds (Kelly and VaR)
+    this.checkConfidenceThreshold(intent, ctx, violations);
     this.checkKellySizing(intent, ctx, violations);
     this.checkVaRLimit(ctx, violations);
+
+    // Kelly Suggested Sizing Calculation (always returned for BUY intents)
+    let kelly_suggested_size: import("../mcp/types").KellySuggestedSize | undefined = undefined;
+    if (intent.side === "buy") {
+      const defaultPct = this.config.max_position_pct_equity;
+      if (ctx.kellyResult) {
+        kelly_suggested_size = {
+          symbol: intent.symbol.toUpperCase(),
+          recommended_pct_equity: ctx.kellyResult.recommended_pct_equity,
+          recommended_notional: Math.round((ctx.kellyResult.recommended_pct_equity / 100) * ctx.account.equity * 100) / 100,
+          historical_trades_analyzed: 200,
+          win_rate: ctx.kellyResult.win_rate,
+          avg_win_pct: ctx.kellyResult.avg_win_pct,
+          avg_loss_pct: ctx.kellyResult.avg_loss_pct,
+          skipped_due_to_no_history: false,
+        };
+      } else {
+        // No history fallback to safety cap (max_position_pct_equity)
+        kelly_suggested_size = {
+          symbol: intent.symbol.toUpperCase(),
+          recommended_pct_equity: defaultPct * 100,
+          recommended_notional: Math.round(defaultPct * ctx.account.equity * 100) / 100,
+          historical_trades_analyzed: 0,
+          win_rate: null,
+          avg_win_pct: null,
+          avg_loss_pct: null,
+          skipped_due_to_no_history: true,
+        };
+      }
+    }
 
     return {
       allowed: violations.length === 0,
       violations,
       warnings,
+      kelly_suggested_size,
     };
   }
 
@@ -623,6 +657,26 @@ export class PolicyEngine {
         message: `Portfolio Value-at-Risk (${(varFraction * 100).toFixed(2)}%) exceeds configured max daily loss cap of ${(limitFraction * 100).toFixed(2)}%`,
         current_value: varFraction,
         limit_value: limitFraction,
+      });
+    }
+  }
+
+  private checkConfidenceThreshold(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.signal_confidence === undefined || intent.signal_confidence === null) return;
+
+    let activeThreshold = 0.5; // default fallback confidence threshold
+    if (ctx.latestRegime && new Date(ctx.latestRegime.expires_at).getTime() > Date.now()) {
+      if (ctx.latestRegime.confidence_threshold_override !== null) {
+        activeThreshold = ctx.latestRegime.confidence_threshold_override;
+      }
+    }
+
+    if (intent.signal_confidence < activeThreshold) {
+      violations.push({
+        rule: "confidence_threshold_violation",
+        message: `Signal confidence ${intent.signal_confidence.toFixed(2)} is below the active threshold of ${activeThreshold.toFixed(2)}`,
+        current_value: intent.signal_confidence,
+        limit_value: activeThreshold,
       });
     }
   }

@@ -14,6 +14,10 @@ import { getRiskState, enableKillSwitch, disableKillSwitch } from "../storage/d1
 import { PolicyEngine } from "../policy/engine";
 import { TradeIntent } from "../policy/contract";
 import { generateApprovalToken, validateApprovalToken, consumeApprovalToken } from "../policy/approval";
+import { createKVClient } from "../storage/kv/client";
+import type { KellyResult } from "../risk/kelly";
+import type { VaRResult } from "../risk/var";
+import type { CorrelationResult } from "../risk/correlation";
 import { createTrade } from "../storage/d1/queries/trades";
 import { hmacVerify } from "../lib/utils";
 import {
@@ -395,6 +399,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         limit_price: z.number().positive().optional(),
         stop_price: z.number().positive().optional(),
         time_in_force: z.enum(["day", "gtc", "ioc", "fok"]).default("day"),
+        signal_confidence: z.number().min(0).max(1).optional(),
       },
       async (input) => {
         const startTime = Date.now();
@@ -403,11 +408,12 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "Either qty or notional required" }), null, 2) }], isError: true };
           }
 
-          const [account, positions, clock, riskState] = await Promise.all([
+          const [account, positions, clock, riskState, latestRegime] = await Promise.all([
             alpaca.trading.getAccount(),
             alpaca.trading.getPositions(),
             alpaca.trading.getClock(),
             getRiskState(db),
+            getLatestRegime(db),
           ]);
 
           const candidateSymbol = input.symbol.toUpperCase();
@@ -415,40 +421,82 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             (p) => p.symbol.toUpperCase() !== candidateSymbol
           );
 
-          // Fetch risk metric inputs asynchronously
-          const [kellyInputs, portfolioReturns, candidateReturns, ...holdingsReturns] = await Promise.all([
-            getKellyInputs(db, candidateSymbol, 200),
-            getJournalReturns(db, undefined, 200),
-            getJournalReturns(db, candidateSymbol, 200),
-            ...existingHoldings.map((p) => getJournalReturns(db, p.symbol.toUpperCase(), 200)),
-          ]);
+          // Instantiate KV Client for cache-aside risk calculations
+          const kvClient = createKVClient(this.env.CACHE);
 
-          const kellyResult = kellyInputs
-            ? calculateKelly({
-                win_rate: kellyInputs.win_rate,
-                avg_win_pct: kellyInputs.avg_win_pct,
-                avg_loss_pct: kellyInputs.avg_loss_pct,
-                fraction_cap: 0.25,
-              })
-            : undefined;
+          // 1. Get or calculate Kelly Sizing Result
+          let kellyResult: KellyResult | undefined = undefined;
+          const cachedKelly = await kvClient.get<KellyResult>(`nightwatcher:cache:kelly:${candidateSymbol}`);
+          if (cachedKelly) {
+            kellyResult = cachedKelly;
+          } else {
+            const kellyInputs = await getKellyInputs(db, candidateSymbol, 200);
+            kellyResult = kellyInputs
+              ? calculateKelly({
+                  win_rate: kellyInputs.win_rate,
+                  avg_win_pct: kellyInputs.avg_win_pct,
+                  avg_loss_pct: kellyInputs.avg_loss_pct,
+                  fraction_cap: 0.25,
+                })
+              : undefined;
+            if (kellyResult) {
+              await kvClient.set(`nightwatcher:cache:kelly:${candidateSymbol}`, kellyResult, 86400); // 24-hour cache
+            }
+          }
 
-          const varResult = calculateVaR({
-            returns_pct: portfolioReturns,
-            portfolio_value: account.equity,
-            confidence: 0.95,
-          });
-
-          const correlationResults = existingHoldings.map((pos, idx) => {
-            const symbolB = pos.symbol.toUpperCase();
-            const returnsB = holdingsReturns[idx] || [];
-            return calculateCorrelation({
-              returns_a: candidateReturns,
-              returns_b: returnsB,
-              symbol_a: candidateSymbol,
-              symbol_b: symbolB,
-              threshold: 0.70,
+          // 2. Get or calculate Portfolio VaR Result
+          let varResult: VaRResult | undefined = undefined;
+          const cachedVaR = await kvClient.get<VaRResult>(`nightwatcher:cache:var`);
+          if (cachedVaR) {
+            varResult = cachedVaR;
+          } else {
+            const portfolioReturns = await getJournalReturns(db, undefined, 200);
+            varResult = calculateVaR({
+              returns_pct: portfolioReturns,
+              portfolio_value: account.equity,
+              confidence: 0.95,
             });
-          });
+            await kvClient.set(`nightwatcher:cache:var`, varResult, 86400); // 24-hour cache
+          }
+
+          // 3. Get or calculate Correlation Results against existing holdings
+          const correlationResults: CorrelationResult[] = [];
+          const missingHoldings: typeof existingHoldings = [];
+
+          await Promise.all(
+            existingHoldings.map(async (pos) => {
+              const symbolB = pos.symbol.toUpperCase();
+              const cachedCorr = await kvClient.get<CorrelationResult>(`nightwatcher:cache:corr:${candidateSymbol}:${symbolB}`);
+              if (cachedCorr) {
+                correlationResults.push(cachedCorr);
+              } else {
+                missingHoldings.push(pos);
+              }
+            })
+          );
+
+          if (missingHoldings.length > 0) {
+            const [candidateReturns, ...holdingsReturns] = await Promise.all([
+              getJournalReturns(db, candidateSymbol, 200),
+              ...missingHoldings.map((p) => getJournalReturns(db, p.symbol.toUpperCase(), 200)),
+            ]);
+
+            await Promise.all(
+              missingHoldings.map(async (pos, idx) => {
+                const symbolB = pos.symbol.toUpperCase();
+                const returnsB = holdingsReturns[idx] || [];
+                const corr = calculateCorrelation({
+                  returns_a: candidateReturns,
+                  returns_b: returnsB,
+                  symbol_a: candidateSymbol,
+                  symbol_b: symbolB,
+                  threshold: 0.70,
+                });
+                correlationResults.push(corr);
+                await kvClient.set(`nightwatcher:cache:corr:${candidateSymbol}:${symbolB}`, corr, 86400); // 24-hour cache
+              })
+            );
+          }
 
           let estimatedPrice = input.limit_price ?? input.stop_price;
           if (!estimatedPrice) {
@@ -488,9 +536,17 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             stop_price: input.stop_price,
             time_in_force: input.time_in_force,
             asset_class,
+            signal_confidence: input.signal_confidence,
           };
 
-          const policyEngine = new PolicyEngine(this.policyConfig!);
+          // Scale max_position_pct_equity dynamically if we have a fresh market regime state
+          const isRegimeFresh = latestRegime && new Date(latestRegime.expires_at).getTime() > Date.now();
+          const activePolicyConfig = { ...this.policyConfig! };
+          if (isRegimeFresh && latestRegime) {
+            activePolicyConfig.max_position_pct_equity = this.policyConfig!.max_position_pct_equity * latestRegime.position_size_multiplier;
+          }
+
+          const policyEngine = new PolicyEngine(activePolicyConfig);
           const policyResult = policyEngine.evaluate({
             order: preview,
             intent,
@@ -501,6 +557,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             kellyResult,
             varResult,
             correlationResults,
+            latestRegime,
           });
 
           if (policyResult.allowed) {

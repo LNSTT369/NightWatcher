@@ -26,6 +26,17 @@ export interface PolicyWarning {
   message: string;
 }
 
+export interface KellySuggestedSize {
+  symbol: string;
+  recommended_pct_equity: number;
+  recommended_notional: number;
+  historical_trades_analyzed: number;
+  win_rate: number | null;
+  avg_win_pct: number | null;
+  avg_loss_pct: number | null;
+  skipped_due_to_no_history: boolean;
+}
+
 export interface PolicyResult {
   allowed: boolean;
   violations: PolicyViolation[];
@@ -33,6 +44,7 @@ export interface PolicyResult {
   approval_token?: string;
   approval_id?: string;
   expires_at?: string;
+  kelly_suggested_size?: KellySuggestedSize;
 }
 
 export interface OrderPreview {

@@ -11,6 +11,7 @@ export const TradeIntentSchema = z.object({
   stop_price: z.number().positive().optional(),
   time_in_force: z.enum(["day", "gtc", "ioc", "fok"]).default("day"),
   asset_class: z.enum(["equity", "option", "crypto"]).optional(),
+  signal_confidence: z.number().min(0).max(1).optional(),
   options: z.object({
     contract_symbol: z.string().min(1),
     underlying: z.string().min(1),
@@ -36,9 +37,21 @@ export interface ApprovedOrderIntent {
   estimated_cost: number;
 }
 
+export interface KellySuggestedSize {
+  symbol: string;
+  recommended_pct_equity: number;
+  recommended_notional: number;
+  historical_trades_analyzed: number;
+  win_rate: number | null;
+  avg_win_pct: number | null;
+  avg_loss_pct: number | null;
+  skipped_due_to_no_history: boolean;
+}
+
 export interface PolicyDecision {
   allowed: boolean;
   violations: PolicyViolation[];
   warnings: PolicyWarning[];
   approvedIntent?: ApprovedOrderIntent;
+  kelly_suggested_size?: KellySuggestedSize;
 }

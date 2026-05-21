@@ -470,6 +470,7 @@ class TradingExecutor {
       notional: Math.round(positionSize * 100) / 100,
       order_type: "market",
       time_in_force: timeInForce,
+      signal_confidence: confidence,
     });
 
     if (!preview.ok) {

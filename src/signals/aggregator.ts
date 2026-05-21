@@ -43,45 +43,40 @@ export function aggregateSignals(
     };
   }
 
-  // Detect directional conflict (ignore neutral-only signals)
   const directions = new Set(
     live.map((s) => s.direction).filter((d) => d !== "neutral")
   );
   const conflict_detected = directions.size > 1;
 
-  if (conflict_detected) {
-    return {
-      aggregated_id: generateId(),
-      symbol,
-      final_direction: "neutral",
-      final_confidence: 0,
-      source_count: live.length,
-      conflict_detected: true,
-      contributing_signals: live,
-      created_at: nowISO(),
-    };
-  }
-
   // score_i = confidence_i × freshness_decay_i × source_weight_i
+  // conviction_i = direction_val × score_i
   const scored = live.map((s) => {
     const weight = sourceWeightOverrides[s.source] ?? SOURCE_WEIGHTS[s.source] ?? 0.5;
     const decay = freshnessDecay(s);
-    return { signal: s, score: s.confidence * decay * weight, weight };
+    const direction_val = s.direction === "long" ? 1 : s.direction === "short" ? -1 : 0;
+    const score = s.confidence * decay * weight;
+    const conviction = direction_val * score;
+    return { signal: s, score, conviction, weight };
   });
 
-  const totalScore = scored.reduce((sum, { score }) => sum + score, 0);
+  const totalConviction = scored.reduce((sum, { conviction }) => sum + conviction, 0);
   const maxPossibleScore = scored.reduce((sum, { weight }) => sum + weight, 0);
 
-  // Normalize to [0, 0.95] — never assign perfect confidence
-  const final_confidence =
-    maxPossibleScore > 0
-      ? Math.min(totalScore / maxPossibleScore, 0.95)
-      : 0;
+  let final_direction: SignalDirection = "neutral";
+  let final_confidence = 0;
 
-  const final_direction: SignalDirection =
-    directions.size === 1
-      ? (Array.from(directions)[0] as SignalDirection)
-      : "neutral";
+  if (maxPossibleScore > 0) {
+    const net_certainty = totalConviction / maxPossibleScore;
+    const conviction_threshold = 0.15; // Threshold below which direction is neutral
+
+    if (Math.abs(net_certainty) >= conviction_threshold) {
+      final_direction = net_certainty > 0 ? "long" : "short";
+      final_confidence = Math.min(Math.abs(net_certainty), 0.95);
+    } else {
+      final_direction = "neutral";
+      final_confidence = Math.min(Math.abs(net_certainty), 0.95);
+    }
+  }
 
   return {
     aggregated_id: generateId(),
@@ -89,7 +84,7 @@ export function aggregateSignals(
     final_direction,
     final_confidence,
     source_count: live.length,
-    conflict_detected: false,
+    conflict_detected,
     contributing_signals: live,
     created_at: nowISO(),
   };

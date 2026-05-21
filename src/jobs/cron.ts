@@ -9,6 +9,11 @@ import {
 } from "../storage/d1/queries/events";
 import { createSECEdgarProvider } from "../providers/news/sec-edgar";
 import { cleanupExpiredSignals } from "../storage/d1/queries/signals";
+import { createKVClient } from "../storage/kv/client";
+import { getJournalReturns, getKellyInputs } from "../storage/d1/queries/risk_metrics";
+import { calculateKelly } from "../risk/kelly";
+import { calculateVaR } from "../risk/var";
+import { calculateCorrelation } from "../risk/correlation";
 
 export async function handleCronEvent(cronId: string, env: Env): Promise<void> {
 
@@ -137,7 +142,64 @@ async function runMidnightReset(env: Env): Promise<void> {
   }
 }
 
-async function runHourlyCacheRefresh(_env: Env): Promise<void> {
+async function runHourlyCacheRefresh(env: Env): Promise<void> {
   console.log("Running hourly cache refresh...");
-  // TODO: Implement cache refresh for KV-cached data (movers, macro, etc.)
+  const db = createD1Client(env.DB);
+  const alpaca = createAlpacaProviders(env);
+  const kvClient = createKVClient(env.CACHE);
+
+  try {
+    const [account, positions] = await Promise.all([
+      alpaca.trading.getAccount(),
+      alpaca.trading.getPositions(),
+    ]);
+
+    // 1. Refresh Portfolio VaR
+    const portfolioReturns = await getJournalReturns(db, undefined, 200);
+    const varResult = calculateVaR({
+      returns_pct: portfolioReturns,
+      portfolio_value: account.equity,
+      confidence: 0.95,
+    });
+    await kvClient.set(`nightwatcher:cache:var`, varResult, 86400);
+    console.log(`Cached portfolio VaR: ${varResult.var_usd.toFixed(2)} USD`);
+
+    // 2. Refresh Kelly and Correlations for active holdings
+    for (const pos of positions) {
+      const symbol = pos.symbol.toUpperCase();
+      
+      // Kelly Sizing
+      const kellyInputs = await getKellyInputs(db, symbol, 200);
+      if (kellyInputs) {
+        const kellyResult = calculateKelly({
+          win_rate: kellyInputs.win_rate,
+          avg_win_pct: kellyInputs.avg_win_pct,
+          avg_loss_pct: kellyInputs.avg_loss_pct,
+          fraction_cap: 0.25,
+        });
+        await kvClient.set(`nightwatcher:cache:kelly:${symbol}`, kellyResult, 86400);
+        console.log(`Cached Kelly for ${symbol}: ${kellyResult.recommended_pct_equity}%`);
+      }
+
+      // Correlations against other active holdings
+      const returnsA = await getJournalReturns(db, symbol, 200);
+      for (const otherPos of positions) {
+        const otherSymbol = otherPos.symbol.toUpperCase();
+        if (symbol === otherSymbol) continue;
+
+        const returnsB = await getJournalReturns(db, otherSymbol, 200);
+        const corr = calculateCorrelation({
+          returns_a: returnsA,
+          returns_b: returnsB,
+          symbol_a: symbol,
+          symbol_b: otherSymbol,
+          threshold: 0.70,
+        });
+        await kvClient.set(`nightwatcher:cache:corr:${symbol}:${otherSymbol}`, corr, 86400);
+      }
+    }
+    console.log("Hourly cache refresh completed successfully.");
+  } catch (error) {
+    console.error("Hourly cache refresh error:", error);
+  }
 }
