@@ -480,6 +480,41 @@ class TradingExecutor {
     if (!preview.data.policy.allowed) {
       const violationMsgs = (preview.data.policy.violations || []).map(v => v.message || v.rule).join("; ");
       this.logger.log(this.name, "policy_rejected", { symbol, violations: violationMsgs });
+      
+      const AGENT_LOG_PATH = path.join(process.cwd(), "agent-logs.json");
+      let logs = [];
+      let formatAsObject = false;
+      try {
+        if (fs.existsSync(AGENT_LOG_PATH)) {
+          const parsed = JSON.parse(fs.readFileSync(AGENT_LOG_PATH, "utf-8"));
+          if (Array.isArray(parsed)) {
+            logs = parsed;
+          } else if (parsed && Array.isArray(parsed.entries)) {
+            logs = parsed.entries;
+            formatAsObject = true;
+          }
+        }
+      } catch (e) {
+        logs = [];
+      }
+      logs.push({
+        timestamp: new Date().toISOString(),
+        symbol,
+        side: "buy",
+        qty: undefined,
+        notional: Math.round(positionSize * 100) / 100,
+        order_type: "market",
+        time_in_force: timeInForce,
+        violations: preview.data.policy.violations || [],
+        warnings: preview.data.policy.warnings || [],
+      });
+      try {
+        const outputData = formatAsObject ? { entries: logs } : logs;
+        fs.writeFileSync(AGENT_LOG_PATH, JSON.stringify(outputData, null, 2));
+      } catch (e) {
+        console.error("Failed to write to agent-logs.json:", e.message);
+      }
+
       return null;
     }
 

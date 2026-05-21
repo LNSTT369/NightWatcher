@@ -12,6 +12,7 @@ import { ErrorCode } from "../lib/errors";
 import { insertToolLog } from "../storage/d1/queries/tool-logs";
 import { getRiskState, enableKillSwitch, disableKillSwitch } from "../storage/d1/queries/risk-state";
 import { PolicyEngine } from "../policy/engine";
+import { TradeIntent } from "../policy/contract";
 import { generateApprovalToken, validateApprovalToken, consumeApprovalToken } from "../policy/approval";
 import { createTrade } from "../storage/d1/queries/trades";
 import { hmacVerify } from "../lib/utils";
@@ -409,6 +410,46 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             getRiskState(db),
           ]);
 
+          const candidateSymbol = input.symbol.toUpperCase();
+          const existingHoldings = positions.filter(
+            (p) => p.symbol.toUpperCase() !== candidateSymbol
+          );
+
+          // Fetch risk metric inputs asynchronously
+          const [kellyInputs, portfolioReturns, candidateReturns, ...holdingsReturns] = await Promise.all([
+            getKellyInputs(db, candidateSymbol, 200),
+            getJournalReturns(db, undefined, 200),
+            getJournalReturns(db, candidateSymbol, 200),
+            ...existingHoldings.map((p) => getJournalReturns(db, p.symbol.toUpperCase(), 200)),
+          ]);
+
+          const kellyResult = kellyInputs
+            ? calculateKelly({
+                win_rate: kellyInputs.win_rate,
+                avg_win_pct: kellyInputs.avg_win_pct,
+                avg_loss_pct: kellyInputs.avg_loss_pct,
+                fraction_cap: 0.25,
+              })
+            : undefined;
+
+          const varResult = calculateVaR({
+            returns_pct: portfolioReturns,
+            portfolio_value: account.equity,
+            confidence: 0.95,
+          });
+
+          const correlationResults = existingHoldings.map((pos, idx) => {
+            const symbolB = pos.symbol.toUpperCase();
+            const returnsB = holdingsReturns[idx] || [];
+            return calculateCorrelation({
+              returns_a: candidateReturns,
+              returns_b: returnsB,
+              symbol_a: candidateSymbol,
+              symbol_b: symbolB,
+              threshold: 0.70,
+            });
+          });
+
           let estimatedPrice = input.limit_price ?? input.stop_price;
           if (!estimatedPrice) {
             try {
@@ -420,7 +461,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
           const estimatedCost = input.notional ?? (input.qty ?? 0) * estimatedPrice;
 
           const preview = {
-            symbol: input.symbol.toUpperCase(),
+            symbol: candidateSymbol,
             side: input.side,
             qty: input.qty,
             notional: input.notional,
@@ -432,8 +473,35 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             estimated_cost: estimatedCost,
           };
 
+          const isCrypto = input.symbol.includes("/") || 
+            ["BTC", "ETH", "SOL", "LTC", "BCH", "DOGE", "SHIB", "AVAX", "LINK", "UNI", "MATIC"]
+              .some(c => candidateSymbol.startsWith(c) && candidateSymbol.endsWith("USD"));
+          const asset_class = isCrypto ? "crypto" : "equity";
+
+          const intent: TradeIntent = {
+            symbol: candidateSymbol,
+            side: input.side,
+            qty: input.qty,
+            notional: input.notional,
+            order_type: input.order_type,
+            limit_price: input.limit_price,
+            stop_price: input.stop_price,
+            time_in_force: input.time_in_force,
+            asset_class,
+          };
+
           const policyEngine = new PolicyEngine(this.policyConfig!);
-          const policyResult = policyEngine.evaluate({ order: preview, account, positions, clock, riskState });
+          const policyResult = policyEngine.evaluate({
+            order: preview,
+            intent,
+            account,
+            positions,
+            clock,
+            riskState,
+            kellyResult,
+            varResult,
+            correlationResults,
+          });
 
           if (policyResult.allowed) {
             const approval = await generateApprovalToken({
