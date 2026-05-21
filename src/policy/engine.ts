@@ -1,71 +1,109 @@
 /**
- * Policy Engine - Trade Validation System
+ * Policy Engine - Trade Validation System (V3)
  * 
- * This is the safety layer that validates every order before execution.
- * All trades must pass through the policy engine to get an approval token.
- * 
- * Checks performed:
- * - Kill switch status (emergency halt)
- * - Loss cooldown period
- * - Daily loss limits
- * - Market hours restrictions
- * - Symbol allow/deny lists
- * - Order type restrictions
- * - Notional (dollar) limits per trade
- * - Position size as % of equity
- * - Maximum open positions
- * - Short selling restrictions
- * - Available buying power
- * 
- * If all checks pass, an approval token is generated that must be used
- * within the configured TTL (default 5 minutes) to execute the order.
+ * Safety layer that validates every order before execution.
+ * Decoupled from speculative research, enforcing mathematically computed bounds.
  */
 
 import type { PolicyConfig, OptionsStrategy } from "./config";
-import type { OrderPreview, PolicyResult, PolicyViolation, PolicyWarning, OptionsOrderPreview, OptionsPolicyResult } from "../mcp/types";
+import type { PolicyViolation, PolicyWarning, PolicyResult, OrderPreview, OptionsOrderPreview } from "../mcp/types";
 import type { Account, Position, MarketClock } from "../providers/types";
 import type { RiskState } from "../storage/d1/queries/risk-state";
+import type { TradeIntent } from "./contract";
+import type { KellyResult } from "../risk/kelly";
+import type { VaRResult } from "../risk/var";
+import type { CorrelationResult } from "../risk/correlation";
 
 export interface PolicyContext {
-  order: OrderPreview;
+  order?: OrderPreview; // Backwards-compatibility
+  intent?: TradeIntent;   // Unified V3 intent contract
   account: Account;
   positions: Position[];
   clock: MarketClock;
   riskState: RiskState;
-}
 
-export interface OptionsPolicyContext {
-  order: OptionsOrderPreview;
-  account: Account;
-  positions: Position[];
-  clock: MarketClock;
-  riskState: RiskState;
+  // Quantitative risk metrics (resolved asynchronously, evaluated synchronously)
+  kellyResult?: KellyResult;
+  varResult?: VaRResult;
+  correlationResults?: CorrelationResult[];
 }
 
 export class PolicyEngine {
-  constructor(public config: PolicyConfig) { }
+  constructor(public config: PolicyConfig) {}
 
   evaluate(ctx: PolicyContext): PolicyResult {
     const violations: PolicyViolation[] = [];
     const warnings: PolicyWarning[] = [];
 
+    // Resolve unified trade intent
+    const intent = ctx.intent ?? (ctx.order ? this.orderToIntent(ctx.order) : null);
+    if (!intent) {
+      violations.push({
+        rule: "invalid_input",
+        message: "No trade intent or order preview provided for policy evaluation",
+        current_value: null,
+        limit_value: "TradeIntent | OrderPreview",
+      });
+      return { allowed: false, violations, warnings };
+    }
+
+    // Core validation checks
     this.checkKillSwitch(ctx, violations);
     this.checkCooldown(ctx, violations);
     this.checkDailyLossLimit(ctx, violations);
-    this.checkTradingHours(ctx, violations, warnings);
-    this.checkSymbolFilters(ctx, violations);
-    this.checkOrderType(ctx, violations);
-    this.checkNotionalLimit(ctx, violations);
-    this.checkPositionSize(ctx, violations, warnings);
-    this.checkOpenPositionsLimit(ctx, violations);
-    this.checkShortSelling(ctx, violations);
-    this.checkBuyingPower(ctx, violations);
+    this.checkTradingHours(intent, ctx.clock, violations, warnings);
+
+    if (intent.asset_class === "option" || intent.options) {
+      // Validate options specific parameters
+      this.evaluateOptionsIntent(intent, ctx, violations, warnings);
+    } else {
+      // Validate equity specific parameters
+      this.evaluateEquityIntent(intent, ctx, violations, warnings);
+    }
+
+    // Quant bounds (Kelly and VaR)
+    this.checkKellySizing(intent, ctx, violations);
+    this.checkVaRLimit(ctx, violations);
 
     return {
       allowed: violations.length === 0,
       violations,
       warnings,
     };
+  }
+
+  evaluateOptionsOrder(ctx: {
+    order: OptionsOrderPreview;
+    account: Account;
+    positions: Position[];
+    clock: MarketClock;
+    riskState: RiskState;
+  }): PolicyResult {
+    const intent: TradeIntent = {
+      symbol: ctx.order.contract_symbol,
+      side: ctx.order.side,
+      qty: ctx.order.qty,
+      order_type: ctx.order.order_type,
+      limit_price: ctx.order.limit_price,
+      time_in_force: ctx.order.time_in_force === "day" ? "day" : "gtc",
+      asset_class: "option",
+      options: {
+        contract_symbol: ctx.order.contract_symbol,
+        underlying: ctx.order.underlying,
+        expiration: ctx.order.expiration,
+        strike: ctx.order.strike,
+        option_type: ctx.order.option_type,
+        dte: ctx.order.dte,
+        delta: ctx.order.delta,
+      }
+    };
+    return this.evaluate({
+      intent,
+      account: ctx.account,
+      positions: ctx.positions,
+      clock: ctx.clock,
+      riskState: ctx.riskState,
+    });
   }
 
   private checkKillSwitch(ctx: PolicyContext, violations: PolicyViolation[]): void {
@@ -109,22 +147,25 @@ export class PolicyEngine {
   }
 
   private checkTradingHours(
-    ctx: PolicyContext,
+    intent: TradeIntent,
+    clock: MarketClock,
     violations: PolicyViolation[],
     warnings: PolicyWarning[]
   ): void {
     if (!this.config.trading_hours_only) return;
+
+    const isCrypto = intent.symbol.includes("/") || 
+      ["BTC", "ETH", "SOL", "LTC", "BCH", "DOGE", "SHIB", "AVAX", "LINK", "UNI", "MATIC"]
+        .some(c => intent.symbol.startsWith(c) && intent.symbol.endsWith("USD"));
     
-    const isCrypto = ctx.order.symbol.includes("/") || 
-      ["BTC", "ETH", "SOL", "LTC", "BCH", "DOGE", "SHIB", "AVAX", "LINK", "UNI", "MATIC"].some(c => ctx.order.symbol.startsWith(c) && ctx.order.symbol.endsWith("USD"));
     if (isCrypto) return; // Crypto trades 24/7
 
-    if (!ctx.clock.is_open) {
+    if (!clock.is_open) {
       if (!this.config.extended_hours_allowed) {
         violations.push({
           rule: "trading_hours",
           message: "Trading outside market hours is not allowed",
-          current_value: ctx.clock.is_open,
+          current_value: clock.is_open,
           limit_value: true,
         });
       } else {
@@ -136,8 +177,23 @@ export class PolicyEngine {
     }
   }
 
-  private checkSymbolFilters(ctx: PolicyContext, violations: PolicyViolation[]): void {
-    const symbol = ctx.order.symbol.toUpperCase();
+  private evaluateEquityIntent(
+    intent: TradeIntent,
+    ctx: PolicyContext,
+    violations: PolicyViolation[],
+    warnings: PolicyWarning[]
+  ): void {
+    this.checkSymbolFilters(intent, violations);
+    this.checkOrderType(intent, violations);
+    this.checkNotionalLimit(intent, violations);
+    this.checkEquityPositionSize(intent, ctx, violations, warnings);
+    this.checkOpenPositionsLimit(intent, ctx, violations);
+    this.checkShortSelling(intent, ctx, violations);
+    this.checkBuyingPower(intent, ctx, violations);
+  }
+
+  private checkSymbolFilters(intent: TradeIntent, violations: PolicyViolation[]): void {
+    const symbol = intent.symbol.toUpperCase();
 
     if (this.config.deny_symbols.map((s) => s.toUpperCase()).includes(symbol)) {
       violations.push({
@@ -162,19 +218,19 @@ export class PolicyEngine {
     }
   }
 
-  private checkOrderType(ctx: PolicyContext, violations: PolicyViolation[]): void {
-    if (!this.config.allowed_order_types.includes(ctx.order.order_type)) {
+  private checkOrderType(intent: TradeIntent, violations: PolicyViolation[]): void {
+    if (!this.config.allowed_order_types.includes(intent.order_type)) {
       violations.push({
         rule: "order_type_not_allowed",
-        message: `Order type '${ctx.order.order_type}' is not allowed`,
-        current_value: ctx.order.order_type,
+        message: `Order type '${intent.order_type}' is not allowed`,
+        current_value: intent.order_type,
         limit_value: this.config.allowed_order_types,
       });
     }
   }
 
-  private checkNotionalLimit(ctx: PolicyContext, violations: PolicyViolation[]): void {
-    const estimatedNotional = this.estimateNotional(ctx.order);
+  private checkNotionalLimit(intent: TradeIntent, violations: PolicyViolation[]): void {
+    const estimatedNotional = this.estimateNotional(intent);
 
     if (estimatedNotional > this.config.max_notional_per_trade) {
       violations.push({
@@ -186,29 +242,45 @@ export class PolicyEngine {
     }
   }
 
-  private checkPositionSize(
+  private checkEquityPositionSize(
+    intent: TradeIntent,
     ctx: PolicyContext,
     violations: PolicyViolation[],
     warnings: PolicyWarning[]
   ): void {
-    if (ctx.order.side !== "buy") return;
+    if (intent.side !== "buy") return;
 
-    const estimatedNotional = this.estimateNotional(ctx.order);
+    const estimatedNotional = this.estimateNotional(intent);
     const existingPosition = ctx.positions.find(
-      (p) => p.symbol.toUpperCase() === ctx.order.symbol.toUpperCase()
+      (p) => p.symbol.toUpperCase() === intent.symbol.toUpperCase()
     );
     const existingValue = existingPosition?.market_value ?? 0;
     const totalPositionValue = estimatedNotional + existingValue;
     const positionPct = totalPositionValue / ctx.account.equity;
 
-    if (positionPct > this.config.max_position_pct_equity) {
+    // Apply correlation clamp: If correlated with existing holdings, cap size at 50%
+    let positionLimitPct = this.config.max_position_pct_equity;
+    if (ctx.correlationResults) {
+      for (const corr of ctx.correlationResults) {
+        if (corr.is_over_threshold && corr.pearson_r > 0) {
+          positionLimitPct = this.config.max_position_pct_equity * 0.5;
+          warnings.push({
+            rule: "correlation_clamp",
+            message: `High correlation detected with ${corr.symbol_b} (r = ${corr.pearson_r.toFixed(2)}). Position limit clamped by 50% to ${(positionLimitPct * 100).toFixed(1)}% of equity.`,
+          });
+          break;
+        }
+      }
+    }
+
+    if (positionPct > positionLimitPct) {
       violations.push({
         rule: "max_position_pct",
-        message: `Position would be ${(positionPct * 100).toFixed(2)}% of equity (limit: ${(this.config.max_position_pct_equity * 100).toFixed(0)}%)`,
+        message: `Position would be ${(positionPct * 100).toFixed(2)}% of equity (limit: ${(positionLimitPct * 100).toFixed(1)}% due to risk rules)`,
         current_value: positionPct,
-        limit_value: this.config.max_position_pct_equity,
+        limit_value: positionLimitPct,
       });
-    } else if (positionPct > this.config.max_position_pct_equity * 0.8) {
+    } else if (positionPct > positionLimitPct * 0.8) {
       warnings.push({
         rule: "position_size_warning",
         message: `Position will be ${(positionPct * 100).toFixed(2)}% of equity, approaching limit`,
@@ -216,11 +288,11 @@ export class PolicyEngine {
     }
   }
 
-  private checkOpenPositionsLimit(ctx: PolicyContext, violations: PolicyViolation[]): void {
-    if (ctx.order.side !== "buy") return;
+  private checkOpenPositionsLimit(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.side !== "buy") return;
 
     const existingPosition = ctx.positions.find(
-      (p) => p.symbol.toUpperCase() === ctx.order.symbol.toUpperCase()
+      (p) => p.symbol.toUpperCase() === intent.symbol.toUpperCase()
     );
     const isNewPosition = !existingPosition;
     const openPositionCount = ctx.positions.length;
@@ -235,39 +307,39 @@ export class PolicyEngine {
     }
   }
 
-  private checkShortSelling(ctx: PolicyContext, violations: PolicyViolation[]): void {
-    if (ctx.order.side !== "sell") return;
+  private checkShortSelling(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.side !== "sell") return;
     if (this.config.allow_short_selling) return;
 
     const existingPosition = ctx.positions.find(
-      (p) => p.symbol.toUpperCase() === ctx.order.symbol.toUpperCase()
+      (p) => p.symbol.toUpperCase() === intent.symbol.toUpperCase()
     );
 
     if (!existingPosition) {
       violations.push({
         rule: "short_selling_blocked",
-        message: `Short selling is disabled. You don't own ${ctx.order.symbol}.`,
+        message: `Short selling is disabled. You don't own ${intent.symbol}.`,
         current_value: 0,
         limit_value: "must own position to sell",
       });
       return;
     }
 
-    const sellQty = ctx.order.qty ?? (ctx.order.notional ? ctx.order.notional / (ctx.order.estimated_price || 1) : 0);
+    const sellQty = intent.qty ?? (intent.notional ? intent.notional / (intent.limit_price ?? intent.stop_price ?? 1) : 0);
     if (sellQty > existingPosition.qty) {
       violations.push({
         rule: "short_selling_blocked",
-        message: `Cannot sell ${sellQty.toFixed(2)} shares of ${ctx.order.symbol} - you only own ${existingPosition.qty.toFixed(2)}. Short selling is disabled.`,
+        message: `Cannot sell ${sellQty.toFixed(2)} shares of ${intent.symbol} - you only own ${existingPosition.qty.toFixed(2)}. Short selling is disabled.`,
         current_value: sellQty,
         limit_value: existingPosition.qty,
       });
     }
   }
 
-  private checkBuyingPower(ctx: PolicyContext, violations: PolicyViolation[]): void {
-    if (ctx.order.side !== "buy") return;
+  private checkBuyingPower(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.side !== "buy") return;
 
-    const estimatedNotional = this.estimateNotional(ctx.order);
+    const estimatedNotional = this.estimateNotional(intent);
     const availableFunds = this.config.use_cash_only ? ctx.account.cash : ctx.account.buying_power;
     const fundType = this.config.use_cash_only ? "cash" : "buying power";
 
@@ -281,39 +353,37 @@ export class PolicyEngine {
     }
   }
 
-  private estimateNotional(order: OrderPreview): number {
-    if (order.notional) {
-      return order.notional;
+  // ============================================================================
+  // Options validation refactored for unified TradeIntent
+  // ============================================================================
+
+  private evaluateOptionsIntent(
+    intent: TradeIntent,
+    ctx: PolicyContext,
+    violations: PolicyViolation[],
+    warnings: PolicyWarning[]
+  ): void {
+    this.checkOptionsEnabled(violations);
+    
+    const opt = intent.options;
+    if (!opt) {
+      violations.push({
+        rule: "options_parameters_missing",
+        message: "Options specific parameter structure was missing from trade intent",
+        current_value: null,
+        limit_value: "options object with contract_symbol, underlying, strike, expiration, etc",
+      });
+      return;
     }
 
-    const price = order.estimated_price ?? order.limit_price ?? order.stop_price ?? 0;
-    return (order.qty ?? 0) * price;
-  }
-
-  evaluateOptionsOrder(ctx: OptionsPolicyContext): OptionsPolicyResult {
-    const violations: PolicyViolation[] = [];
-    const warnings: PolicyWarning[] = [];
-
-    this.checkKillSwitch(ctx as unknown as PolicyContext, violations);
-    this.checkCooldown(ctx as unknown as PolicyContext, violations);
-    this.checkDailyLossLimit(ctx as unknown as PolicyContext, violations);
-    this.checkTradingHours(ctx as unknown as PolicyContext, violations, warnings);
-
-    this.checkOptionsEnabled(violations);
-    this.checkOptionsDTE(ctx, violations);
-    this.checkOptionsDelta(ctx, violations, warnings);
-    this.checkOptionsStrategy(ctx, violations);
-    this.checkOptionsPositionSize(ctx, violations);
-    this.checkOptionsTotalExposure(ctx, violations, warnings);
-    this.checkOptionsPositionCount(ctx, violations);
-    this.checkOptionsAveragingDown(ctx, violations);
-    this.checkOptionsBuyingPower(ctx, violations);
-
-    return {
-      allowed: violations.length === 0,
-      violations,
-      warnings,
-    };
+    this.checkOptionsDTE(opt.dte, violations);
+    this.checkOptionsDelta(opt.delta, violations, warnings);
+    this.checkOptionsStrategy(intent, ctx, violations);
+    this.checkOptionsPositionSize(intent, ctx, violations);
+    this.checkOptionsTotalExposure(intent, ctx, violations, warnings);
+    this.checkOptionsPositionCount(opt.contract_symbol, ctx, violations);
+    this.checkOptionsAveragingDown(opt.contract_symbol, ctx, violations);
+    this.checkOptionsBuyingPower(intent, ctx, violations);
   }
 
   private checkOptionsEnabled(violations: PolicyViolation[]): void {
@@ -327,8 +397,7 @@ export class PolicyEngine {
     }
   }
 
-  private checkOptionsDTE(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
-    const { dte } = ctx.order;
+  private checkOptionsDTE(dte: number, violations: PolicyViolation[]): void {
     const { min_dte, max_dte } = this.config.options;
 
     if (dte < min_dte) {
@@ -351,11 +420,10 @@ export class PolicyEngine {
   }
 
   private checkOptionsDelta(
-    ctx: OptionsPolicyContext,
+    delta: number | undefined,
     violations: PolicyViolation[],
     warnings: PolicyWarning[]
   ): void {
-    const { delta } = ctx.order;
     if (delta === undefined) {
       warnings.push({
         rule: "options_delta_unknown",
@@ -386,26 +454,23 @@ export class PolicyEngine {
     }
   }
 
-  private checkOptionsStrategy(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
-    const { side, option_type } = ctx.order;
+  private checkOptionsStrategy(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    const opt = intent.options!;
+    const side = intent.side;
+    const option_type = opt.option_type;
     const { allowed_strategies } = this.config.options;
     const positions = ctx.positions ?? [];
 
-    // Map side+type to canonical strategy name
     let strategy: OptionsStrategy | null = null;
     if (side === "buy" && option_type === "call") {
       strategy = "long_call";
     } else if (side === "buy" && option_type === "put") {
       strategy = "long_put";
     } else if (side === "sell" && option_type === "call") {
-      // Covered call if holding the underlying, otherwise naked short call
-      const underlying = ctx.order.underlying?.toUpperCase();
-      const hasUnderlying = underlying && positions.some(p => p.symbol === underlying && Number(p.qty) > 0);
+      const underlying = opt.underlying.toUpperCase();
+      const hasUnderlying = positions.some(p => p.symbol === underlying && Number(p.qty) > 0);
       strategy = hasUnderlying ? "covered_call" : "short_call";
     } else if (side === "sell" && option_type === "put") {
-      // Cash-secured put maps to cash_secured_put; naked short put is short_put.
-      // We can't verify cash coverage here (buying power check handles it), so
-      // we map to cash_secured_put and let the buying power check enforce margin.
       strategy = "cash_secured_put";
     }
 
@@ -422,17 +487,17 @@ export class PolicyEngine {
     if (!allowed_strategies.includes(strategy)) {
       violations.push({
         rule: "options_strategy_not_allowed",
-        message: `Options strategy '${strategy}' is not in allowed list. Add it to allowed_strategies via policy-update.`,
+        message: `Options strategy '${strategy}' is not in allowed list.`,
         current_value: strategy,
         limit_value: allowed_strategies,
       });
     }
   }
 
-  private checkOptionsPositionSize(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
-    if (ctx.order.side !== "buy") return;
+  private checkOptionsPositionSize(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.side !== "buy") return;
 
-    const estimatedCost = this.estimateOptionsCost(ctx.order);
+    const estimatedCost = this.estimateOptionsCost(intent);
     const maxAllowed = ctx.account.equity * this.config.options.max_pct_per_option_trade;
 
     if (estimatedCost > maxAllowed) {
@@ -446,15 +511,16 @@ export class PolicyEngine {
   }
 
   private checkOptionsTotalExposure(
-    ctx: OptionsPolicyContext,
+    intent: TradeIntent,
+    ctx: PolicyContext,
     violations: PolicyViolation[],
     warnings: PolicyWarning[]
   ): void {
-    if (ctx.order.side !== "buy") return;
+    if (intent.side !== "buy") return;
 
     const optionsPositions = ctx.positions.filter(p => p.asset_class === "us_option");
     const currentExposure = optionsPositions.reduce((sum, p) => sum + Math.abs(p.market_value), 0);
-    const orderCost = this.estimateOptionsCost(ctx.order);
+    const orderCost = this.estimateOptionsCost(intent);
     const newTotalExposure = currentExposure + orderCost;
     const maxExposure = ctx.account.equity * this.config.options.max_total_options_exposure_pct;
 
@@ -473,12 +539,10 @@ export class PolicyEngine {
     }
   }
 
-  private checkOptionsPositionCount(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
-    if (ctx.order.side !== "buy") return;
-
+  private checkOptionsPositionCount(contractSymbol: string, ctx: PolicyContext, violations: PolicyViolation[]): void {
     const optionsPositions = ctx.positions.filter(p => p.asset_class === "us_option");
     const existingPosition = optionsPositions.find(
-      p => p.symbol.toUpperCase() === ctx.order.contract_symbol.toUpperCase()
+      p => p.symbol.toUpperCase() === contractSymbol.toUpperCase()
     );
 
     if (!existingPosition && optionsPositions.length >= this.config.options.max_option_positions) {
@@ -491,13 +555,12 @@ export class PolicyEngine {
     }
   }
 
-  private checkOptionsAveragingDown(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
+  private checkOptionsAveragingDown(contractSymbol: string, ctx: PolicyContext, violations: PolicyViolation[]): void {
     if (!this.config.options.no_averaging_down) return;
-    if (ctx.order.side !== "buy") return;
 
     const optionsPositions = ctx.positions.filter(p => p.asset_class === "us_option");
     const existingPosition = optionsPositions.find(
-      p => p.symbol.toUpperCase() === ctx.order.contract_symbol.toUpperCase()
+      p => p.symbol.toUpperCase() === contractSymbol.toUpperCase()
     );
 
     if (existingPosition && existingPosition.unrealized_pl < 0) {
@@ -510,10 +573,10 @@ export class PolicyEngine {
     }
   }
 
-  private checkOptionsBuyingPower(ctx: OptionsPolicyContext, violations: PolicyViolation[]): void {
-    if (ctx.order.side !== "buy") return;
+  private checkOptionsBuyingPower(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.side !== "buy") return;
 
-    const estimatedCost = this.estimateOptionsCost(ctx.order);
+    const estimatedCost = this.estimateOptionsCost(intent);
     const availableFunds = this.config.use_cash_only ? ctx.account.cash : ctx.account.buying_power;
     const fundType = this.config.use_cash_only ? "cash" : "buying power";
 
@@ -527,11 +590,74 @@ export class PolicyEngine {
     }
   }
 
-  private estimateOptionsCost(order: OptionsOrderPreview): number {
-    if (order.estimated_cost) {
-      return order.estimated_cost;
+  // ============================================================================
+  // Quantitative bounds checking
+  // ============================================================================
+
+  private checkKellySizing(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (intent.side !== "buy" || !ctx.kellyResult) return;
+
+    const estimatedCost = this.estimateNotional(intent);
+    const proposedSizePct = (estimatedCost / ctx.account.equity) * 100;
+    const limit = ctx.kellyResult.recommended_pct_equity;
+
+    if (proposedSizePct > limit) {
+      violations.push({
+        rule: "kelly_size_violation",
+        message: `Proposed size of ${proposedSizePct.toFixed(2)}% of equity exceeds Kelly-optimal sizing limit of ${limit.toFixed(2)}%`,
+        current_value: proposedSizePct,
+        limit_value: limit,
+      });
     }
-    const premium = order.estimated_premium ?? order.limit_price ?? 0;
-    return order.qty * premium * 100;
+  }
+
+  private checkVaRLimit(ctx: PolicyContext, violations: PolicyViolation[]): void {
+    if (!ctx.varResult) return;
+
+    const varFraction = ctx.varResult.var_usd / ctx.account.equity;
+    const limitFraction = this.config.max_daily_loss_pct;
+
+    if (varFraction > limitFraction) {
+      violations.push({
+        rule: "var_limit_exceeded",
+        message: `Portfolio Value-at-Risk (${(varFraction * 100).toFixed(2)}%) exceeds configured max daily loss cap of ${(limitFraction * 100).toFixed(2)}%`,
+        current_value: varFraction,
+        limit_value: limitFraction,
+      });
+    }
+  }
+
+  // ============================================================================
+  // Helpers
+  // ============================================================================
+
+  private estimateNotional(intent: TradeIntent): number {
+    if (intent.notional) {
+      return intent.notional;
+    }
+
+    const price = intent.limit_price ?? intent.stop_price ?? 0;
+    return (intent.qty ?? 0) * price;
+  }
+
+  private estimateOptionsCost(intent: TradeIntent): number {
+    const opt = intent.options;
+    const premium = intent.limit_price ?? (opt?.delta ? Math.abs(opt.delta) * 2 : 0);
+    return (intent.qty ?? 0) * premium * 100;
+  }
+
+  // Backwards-compatibility parsers
+  private orderToIntent(order: OrderPreview): TradeIntent {
+    return {
+      symbol: order.symbol,
+      side: order.side,
+      qty: order.qty,
+      notional: order.notional,
+      order_type: order.order_type,
+      limit_price: order.limit_price,
+      stop_price: order.stop_price,
+      time_in_force: order.time_in_force,
+      asset_class: order.mleg_legs ? "option" : "equity",
+    };
   }
 }
