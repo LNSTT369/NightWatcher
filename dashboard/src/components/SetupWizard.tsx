@@ -118,28 +118,31 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         {step === 1 && (
           <div className="space-y-6">
             <div className="text-center py-4">
-              <h2 className="text-2xl font-light text-hud-text-bright mb-2">Welcome to Nightwatcher</h2>
-              <p className="text-hud-text-dim text-sm">
-                Autonomous trading powered by social sentiment and AI analysis
+              <h2 className="text-2xl font-light text-hud-text-bright mb-2">NIGHTWATCHER V3</h2>
+              <p className="text-hud-primary text-sm font-medium tracking-wide">
+                Universal execution layer for autonomous trading
+              </p>
+              <p className="text-hud-text-dim text-xs mt-1">
+                Any strategy · Any language · One signal call.
               </p>
             </div>
 
             <div className="space-y-4 text-sm text-hud-text">
               <div className="flex items-start gap-3">
                 <span className="text-hud-success">1.</span>
-                <span>Monitors StockTwits for sentiment signals</span>
+                <span>Universal open API accepting signals via REST, WebSocket, or MCP</span>
               </div>
               <div className="flex items-start gap-3">
                 <span className="text-hud-success">2.</span>
-                <span>AI research agents analyze candidates 24/7</span>
+                <span>Deterministic pre-trade Policy Engine enforcing strict risk controls</span>
               </div>
               <div className="flex items-start gap-3">
                 <span className="text-hud-success">3.</span>
-                <span>LLM makes final trading decisions at market open</span>
+                <span>Institutional-grade quantitative limits: Kelly sizing, portfolio VaR, & Pearson concentration clamps</span>
               </div>
               <div className="flex items-start gap-3">
                 <span className="text-hud-success">4.</span>
-                <span>Automatic stop-loss and take-profit protection</span>
+                <span>Secure two-step HMAC-signed token approval with complete D1 audit logging</span>
               </div>
             </div>
 
