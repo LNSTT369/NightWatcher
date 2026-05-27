@@ -11,6 +11,8 @@ interface PanelProps {
   accentColor?: string
   /** Ambient inner glow matching accent */
   accentGlow?: boolean
+  /** Enable glassmorphism styling */
+  glass?: boolean
 }
 
 export function Panel({
@@ -21,6 +23,7 @@ export function Panel({
   noPadding = false,
   accentColor,
   accentGlow = false,
+  glass = true,
 }: PanelProps) {
   const accentStyle = accentColor
     ? ({
@@ -30,19 +33,19 @@ export function Panel({
     : undefined
 
   return (
-    <div className={clsx('hud-panel flex flex-col', className)} style={accentStyle}>
+    <div className={clsx(glass ? 'hud-panel-glass' : 'hud-panel', 'flex flex-col', className)} style={accentStyle}>
       {(title || titleRight) && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-hud-line/60 shrink-0">
+        <div className="flex items-center gap-2 px-3 py-2 border-b-2 border-black shrink-0">
           {title && (
             <span
               className="hud-label whitespace-nowrap"
-              style={{ color: accentColor ?? 'var(--color-hud-primary)' }}
+              style={{ color: '#000000' }}
             >
               {title}
             </span>
           )}
           {/* horizontal rule filling the gap */}
-          <div className="flex-1 h-px" style={{ background: `linear-gradient(90deg, ${accentColor ?? 'var(--color-hud-primary)'}30, transparent)` }} />
+          <div className="flex-1 border-b-2 border-dotted border-black opacity-30" />
           {titleRight && (
             <div className="shrink-0">
               {typeof titleRight === 'string'

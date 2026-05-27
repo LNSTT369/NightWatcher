@@ -49,7 +49,14 @@ let cachedRegime = null; // fetched once per scan day
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
+  if (!res || !res.content || !res.content[0] || !res.content[0].text) {
+    return { ok: false, error: "Empty or invalid response structure" };
+  }
+  try {
+    return JSON.parse(res.content[0].text);
+  } catch (err) {
+    return { ok: false, error: err.message, _raw: res.content[0].text };
+  }
 }
 
 function msUntilET(hour, minute) {
@@ -76,44 +83,80 @@ function isBeforeEntryCutoff() {
 // ── Filter helpers ────────────────────────────────────────────────────────────
 
 /**
- * Compute 20-day average daily range percent: mean((H-L)/C) × 100.
- * Returns null on error.
+ * Compute ADR% and ATR from a single batch of daily bars.
+ * ADR = mean((H-L)/C) × 100 over last `lookback` completed days.
+ * ATR = average true range over last 14 bars.
+ * Returns { adr_pct: number|null, atr: number|null }.
  */
-async function computeADR(client, symbol) {
-  const lookback = cfg.filters.adr.lookback_days + 1;
-  const res = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: lookback });
-  if (!res.ok || !res.data.bars?.length) return null;
+function computeDailyMetrics(bars) {
+  if (!bars || bars.length < 2) return { adr_pct: null, atr: null };
 
-  const bars = res.data.bars.slice(0, -1); // drop today's incomplete bar
-  if (!bars.length) return null;
+  // Drop today's incomplete bar for ADR
+  const completedBars = bars.slice(0, -1);
 
-  const sum = bars.reduce((acc, b) => acc + (b.h - b.l) / b.c, 0);
-  return (sum / bars.length) * 100;
+  // ADR%
+  let adr_pct = null;
+  if (completedBars.length > 0) {
+    const lookback = Math.min(completedBars.length, cfg.filters.adr.lookback_days);
+    const slice = completedBars.slice(-lookback);
+    const sum = slice.reduce((acc, b) => acc + (b.h - b.l) / b.c, 0);
+    adr_pct = (sum / slice.length) * 100;
+  }
+
+  // ATR (14-period) — uses all bars including today for TR calculation
+  let atr = null;
+  if (bars.length >= 15) {
+    const trs = [];
+    for (let i = 1; i < bars.length; i++) {
+      const h = bars[i].h;
+      const l = bars[i].l;
+      const cp = bars[i - 1].c;
+      const tr = Math.max(h - l, Math.abs(h - cp), Math.abs(l - cp));
+      trs.push(tr);
+    }
+    atr = trs.slice(-14).reduce((a, b) => a + b, 0) / 14;
+  }
+
+  return { adr_pct, atr };
 }
 
 /**
- * Fetch the 9:30–10:30 range (h - l) for the last N trading days.
- * Looks for hourly bars where the bar closes at 10:30 AM ET (UTC hour depends on DST offset).
- * Returns array of range values (empty on error).
+ * Compute historical NR ranges and RVOL from a single batch of hourly bars.
+ * NR: extracts 9:30–10:30 ET bar ranges for percentile calculation.
+ * RVOL: today's 9:30–10:30 volume vs 20-day average.
+ * Returns { historicalRanges: number[], rvol: number|null }.
  */
-async function fetchHistoricalRanges(client, symbol) {
-  const lookback = cfg.filters.narrow_range.lookback_days;
-  const limit = lookback * 8; // ~8 regular-session hourly bars per day
-  const res = await t(client, "prices-bars", { symbol, timeframe: "1Hour", limit });
-  if (!res.ok || !res.data.bars?.length) return [];
+function computeHourlyMetrics(bars) {
+  if (!bars || bars.length === 0) return { historicalRanges: [], rvol: null };
 
-  // DST offset: EDT (Mar–Nov) = UTC-4, EST (Dec–Feb) = UTC-5
   const now = new Date();
   const isDST = (now.getUTCMonth() + 1) >= 3 && (now.getUTCMonth() + 1) <= 11;
   const utcHourFor1030ET = isDST ? 14 : 15; // 10:30 ET in UTC
 
-  return res.data.bars
-    .filter(b => {
-      const barTime = new Date(b.t);
-      return barTime.getUTCHours() === utcHourFor1030ET &&
-             barTime.getUTCMinutes() === 30;
-    })
-    .map(b => b.h - b.l);
+  // Filter to the 9:30–10:30 AM ET bars
+  const orbBars = bars.filter(b => {
+    const barTime = new Date(b.t);
+    return barTime.getUTCHours() === utcHourFor1030ET &&
+           barTime.getUTCMinutes() === 30;
+  });
+
+  // Historical ranges for NR percentile
+  const historicalRanges = orbBars.map(b => b.h - b.l);
+
+  // RVOL: today's bar volume vs prior days average
+  let rvol = null;
+  if (orbBars.length >= 5) {
+    const todayBar = orbBars[orbBars.length - 1];
+    const priorBars = orbBars.slice(0, -1);
+    if (todayBar && priorBars.length > 0) {
+      const avgVol = priorBars.reduce((acc, b) => acc + b.v, 0) / priorBars.length;
+      if (avgVol > 0) {
+        rvol = todayBar.v / avgVol;
+      }
+    }
+  }
+
+  return { historicalRanges, rvol };
 }
 
 /**
@@ -133,12 +176,15 @@ async function detectRegime(client, state) {
   return cachedRegime;
 }
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // ── Step 1: capture ORB ranges + filter inputs ────────────────────────────────
 
 async function captureRanges(client, state) {
-  state.log("ORB", `Capturing 60m opening ranges for: ${cfg.watchlist.join(", ")}`);
+  state.log("ORB", `Capturing 60m opening ranges for ${cfg.watchlist.length} symbols`);
 
   for (const symbol of cfg.watchlist) {
+    // 1. Fetch the ORB bar itself (1Hour, 3 bars)
     const res = await t(client, "prices-bars", {
       symbol,
       timeframe: cfg.orb_timeframe,
@@ -147,6 +193,7 @@ async function captureRanges(client, state) {
 
     if (!res.ok || !res.data.bars?.length) {
       state.log("ORB", `${symbol} — failed to fetch bars, skipping`);
+      await sleep(100); // throttle even on failures
       continue;
     }
 
@@ -156,14 +203,35 @@ async function captureRanges(client, state) {
     const range = orbBar.h - orbBar.l;
     if (range <= 0) {
       state.log("ORB", `${symbol} — zero-width range, skipping`);
+      await sleep(100);
       continue;
     }
 
-    // Compute filter inputs in parallel
-    const [adr_pct, historicalRanges] = await Promise.all([
-      cfg.filters.adr.enabled     ? computeADR(client, symbol)              : Promise.resolve(null),
-      cfg.filters.narrow_range.enabled ? fetchHistoricalRanges(client, symbol) : Promise.resolve([]),
-    ]);
+    // 2. Single daily bars fetch → ADR% + ATR (was 2 separate calls)
+    let adr_pct = null;
+    let atr = null;
+    if (cfg.filters.adr.enabled) {
+      const dailyRes = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: 22 });
+      if (dailyRes.ok && dailyRes.data.bars?.length) {
+        const metrics = computeDailyMetrics(dailyRes.data.bars);
+        adr_pct = metrics.adr_pct;
+        atr = metrics.atr;
+      }
+    }
+
+    // 3. Single hourly bars fetch → NR ranges + RVOL (was 2 separate calls)
+    let historicalRanges = [];
+    let rvol = null;
+    const needHourly = cfg.filters.narrow_range.enabled || cfg.filters?.rvol?.enabled === true;
+    if (needHourly) {
+      const hourlyLimit = Math.max(cfg.filters.narrow_range.lookback_days, 20) * 8;
+      const hourlyRes = await t(client, "prices-bars", { symbol, timeframe: "1Hour", limit: hourlyLimit });
+      if (hourlyRes.ok && hourlyRes.data.bars?.length) {
+        const metrics = computeHourlyMetrics(hourlyRes.data.bars);
+        historicalRanges = metrics.historicalRanges;
+        rvol = metrics.rvol;
+      }
+    }
 
     // Range percentile: fraction of historical ranges ≤ today's range
     let range_percentile = null;
@@ -172,22 +240,62 @@ async function captureRanges(client, state) {
       range_percentile = below / historicalRanges.length;
     }
 
+    // 4. Dual Thrust range calculation
+    let trigger_range = range;
+    let is_dual_thrust = false;
+    if (cfg.dual_thrust?.enabled) {
+      const lookback = cfg.dual_thrust.lookback_days || 5;
+      const dailyRes = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: lookback + 2 });
+      if (dailyRes.ok && dailyRes.data.bars?.length >= 2) {
+        const completedDaily = dailyRes.data.bars.slice(0, -1).slice(-lookback);
+        if (completedDaily.length > 0) {
+          const highs = completedDaily.map(b => b.h);
+          const lows = completedDaily.map(b => b.l);
+          const closes = completedDaily.map(b => b.c);
+          
+          const maxHigh = Math.max(...highs);
+          const minClose = Math.min(...closes);
+          const maxClose = Math.max(...closes);
+          const minLow = Math.min(...lows);
+          
+          const range1 = maxHigh - minClose;
+          const range2 = maxClose - minLow;
+          
+          trigger_range = Math.max(range1, range2);
+          is_dual_thrust = true;
+        }
+      }
+    }
+
     orbRanges.set(symbol, {
       high: orbBar.h,
       low:  orbBar.l,
+      open: orbBar.o,
       range,
+      trigger_range,
+      is_dual_thrust,
       time: orbBar.t,
       adr_pct,
       range_percentile,
+      atr,
+      rvol,
     });
 
     state.log("ORB", `${symbol} range captured`, {
       high:             orbBar.h.toFixed(2),
       low:              orbBar.l.toFixed(2),
+      open:             orbBar.o.toFixed(2),
       range:            range.toFixed(2),
+      trigger_range:    trigger_range.toFixed(2),
+      dual_thrust:      is_dual_thrust,
       adr_pct:          adr_pct != null ? `${adr_pct.toFixed(2)}%` : "n/a",
       range_percentile: range_percentile != null ? range_percentile.toFixed(2) : "n/a",
+      atr:              atr != null ? atr.toFixed(2) : "n/a",
+      rvol:             rvol != null ? rvol.toFixed(2) : "n/a",
     });
+
+    // Throttle between symbols to stay under Alpaca's 200 req/min limit
+    await sleep(100);
   }
 }
 
@@ -242,14 +350,42 @@ async function checkBreakouts(client, state) {
       state.log("FILTER", `${symbol} — NR pass (pctile ${orb.range_percentile.toFixed(2)} ≤ ${cfg.filters.narrow_range.percentile_max})`);
     }
 
+    // ── RVOL gate ──────────────────────────────────────────────────────────────
+    const rvolEnabled = cfg.filters?.rvol?.enabled === true;
+    const rvolMinRatio = cfg.filters?.rvol?.min_ratio ?? 2.5;
+    if (rvolEnabled) {
+      if (orb.rvol == null) {
+        state.log("FILTER", `${symbol} — RVOL unavailable, skip`);
+        continue;
+      }
+      if (orb.rvol < rvolMinRatio) {
+        state.log("FILTER", `${symbol} — RVOL ${orb.rvol.toFixed(2)} < ${rvolMinRatio} (insufficient volume), skip`);
+        continue;
+      }
+      state.log("FILTER", `${symbol} — RVOL pass (ratio ${orb.rvol.toFixed(2)} >= ${rvolMinRatio})`);
+    }
+
     // ── Breakout price check ───────────────────────────────────────────────────
     const overview = await t(client, "symbol-overview", { symbol });
     if (!overview.ok) continue;
     const price = overview.data.latest_price;
     if (!price) continue;
 
-    const buffer   = orb.range * (cfg.breakout_buffer_pct / 100);
-    const longBreak = price > orb.high + buffer;
+    // Dual Thrust breakout uses: Open + k1 * trigger_range
+    // Otherwise standard ORB uses: High + buffer
+    let longBreak = false;
+    let breakoutThreshold = orb.high;
+    let buffer = 0;
+
+    if (orb.is_dual_thrust) {
+      const k1 = cfg.dual_thrust.param_k1 ?? 0.5;
+      breakoutThreshold = orb.open + k1 * orb.trigger_range;
+      longBreak = price > breakoutThreshold;
+    } else {
+      buffer = orb.atr != null ? 0.15 * orb.atr : orb.range * (cfg.breakout_buffer_pct / 100);
+      breakoutThreshold = orb.high + buffer;
+      longBreak = price > breakoutThreshold;
+    }
 
     if (!longBreak) continue;
 
@@ -258,11 +394,19 @@ async function checkBreakouts(client, state) {
       continue;
     }
 
-    state.log("ORB", `${symbol} LONG breakout confirmed @ $${price.toFixed(2)}`, {
-      orb_high: orb.high.toFixed(2),
-      buffer:   buffer.toFixed(4),
-      adr_pct:  orb.adr_pct?.toFixed(2) ?? "n/a",
-    });
+    if (orb.is_dual_thrust) {
+      state.log("ORB", `${symbol} LONG Dual Thrust breakout confirmed @ $${price.toFixed(2)} (threshold $${breakoutThreshold.toFixed(2)}, today's open $${orb.open.toFixed(2)})`, {
+        open: orb.open.toFixed(2),
+        trigger_range: orb.trigger_range.toFixed(2),
+        k1: cfg.dual_thrust.param_k1 ?? 0.5,
+      });
+    } else {
+      state.log("ORB", `${symbol} LONG breakout confirmed @ $${price.toFixed(2)}`, {
+        orb_high: orb.high.toFixed(2),
+        buffer:   buffer.toFixed(4),
+        adr_pct:  orb.adr_pct?.toFixed(2) ?? "n/a",
+      });
+    }
 
     await enterLong(client, state, symbol, price, orb);
   }

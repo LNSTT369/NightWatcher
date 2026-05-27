@@ -102,3 +102,69 @@ export function sanitizeForLog(obj: unknown): unknown {
   }
   return result;
 }
+
+/**
+ * Encrypts a text string using AES-GCM and a shared secret.
+ * Returns a hex-encoded string containing both IV and ciphertext.
+ */
+export async function encryptText(text: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  // Ensure the key material is exactly 256 bits (32 bytes)
+  const paddedSecret = secret.padEnd(32, "x").slice(0, 32);
+  
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(paddedSecret),
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"]
+  );
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    encoder.encode(text)
+  );
+
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(encrypted), iv.length);
+
+  return Array.from(combined)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Decrypts a hex-encoded AES-GCM ciphertext using a shared secret.
+ */
+export async function decryptText(encryptedHex: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const paddedSecret = secret.padEnd(32, "x").slice(0, 32);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(paddedSecret),
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"]
+  );
+
+  const combined = new Uint8Array(
+    encryptedHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
+  );
+
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    key,
+    ciphertext
+  );
+
+  return decoder.decode(decrypted);
+}
+

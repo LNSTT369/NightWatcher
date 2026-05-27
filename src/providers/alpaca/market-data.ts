@@ -198,6 +198,84 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
     return bars ? bars.map(parseBar) : [];
   }
 
+  async getMultiBars(
+    symbols: string[],
+    timeframe: string,
+    params?: BarsParams
+  ): Promise<Record<string, Bar[]>> {
+    if (symbols.length === 0) return {};
+
+    const defaultStart = (limit: number | undefined): string | undefined => {
+      if (params?.start) return undefined;
+      const days = timeframe === "1Day" ? (limit ?? 100) * 2
+                 : timeframe === "1Week" ? (limit ?? 52) * 10
+                 : timeframe === "1Month" ? (limit ?? 12) * 45
+                 : (limit ?? 200);
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - days);
+      return d.toISOString().split("T")[0];
+    };
+
+    const cryptoSymbols = symbols.filter(s => this.isCrypto(s));
+    const stockSymbols = symbols.filter(s => !this.isCrypto(s));
+
+    const result: Record<string, Bar[]> = {};
+
+    if (cryptoSymbols.length > 0) {
+      try {
+        const response = await this.client.dataRequest<AlpacaCryptoBarsResponse>(
+          "GET",
+          `/v1beta3/crypto/us/bars`,
+          {
+            symbols: cryptoSymbols.join(","),
+            timeframe,
+            start: params?.start ?? defaultStart(params?.limit),
+            end: params?.end,
+            limit: params?.limit,
+          }
+        );
+        if (response && response.bars) {
+          for (const [sym, rawBars] of Object.entries(response.bars)) {
+            result[sym] = rawBars.map(parseBar);
+          }
+        }
+      } catch (error) {
+        console.error(`[AlpacaMarketDataProvider] getMultiBars crypto error:`, error);
+      }
+    }
+
+    if (stockSymbols.length > 0) {
+      const chunkSize = 100;
+      for (let i = 0; i < stockSymbols.length; i += chunkSize) {
+        const chunk = stockSymbols.slice(i, i + chunkSize);
+        try {
+          const response = await this.client.dataRequest<AlpacaBarsResponse>(
+            "GET",
+            "/v2/stocks/bars",
+            {
+              symbols: chunk.join(","),
+              timeframe,
+              start: params?.start ?? defaultStart(params?.limit),
+              end: params?.end,
+              limit: params?.limit,
+              adjustment: params?.adjustment,
+              feed: params?.feed,
+            }
+          );
+          if (response && response.bars) {
+            for (const [sym, rawBars] of Object.entries(response.bars)) {
+              result[sym] = rawBars.map(parseBar);
+            }
+          }
+        } catch (error) {
+          console.error(`[AlpacaMarketDataProvider] getMultiBars stock chunk error:`, error);
+        }
+      }
+    }
+
+    return result;
+  }
+
   async getLatestBar(symbol: string): Promise<Bar> {
     // Crypto doesn't have a specific "latest bar" endpoint usually, just use getBars with limit 1
     if (this.isCrypto(symbol)) {

@@ -55,7 +55,15 @@ async function connectMcp(label) {
   const client = new Client({ name: `scan-now-${label}`, version: "1.0" }, { capabilities: {} });
   await client.connect(transport);
   const r = await client.callTool({ name: "auth-verify", arguments: {} });
-  const auth = JSON.parse(r.content[0].text);
+  if (!r || !r.content || !r.content[0] || !r.content[0].text) {
+    throw new Error(`Empty or invalid response structure: ${JSON.stringify(r)}`);
+  }
+  let auth;
+  try {
+    auth = JSON.parse(r.content[0].text);
+  } catch (e) {
+    throw new Error(`Invalid JSON response from auth-verify: ${r.content[0].text.substring(0, 200)}`);
+  }
   if (!auth.ok) throw new Error("Alpaca auth failed");
   console.log(`  MCP connected — paper=${auth.data.paper}  account=${auth.data.account_number}`);
   return {

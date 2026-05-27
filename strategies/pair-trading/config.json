@@ -1,0 +1,22 @@
+{
+  "watchlist_pairs": [
+    ["AAPL", "MSFT"],
+    ["V", "MA"],
+    ["XOM", "CVX"],
+    ["JPM", "BAC"]
+  ],
+  "lookback_days": 20,
+  "zscore_entry": 2.0,
+  "zscore_exit": 0.2,
+  "notional": 500,
+  "max_positions": 2,
+  "poll_interval_ms": 300000,
+  "allowed_regimes": [
+    "range_bound",
+    "low_volatility"
+  ],
+  "time_exit_et": {
+    "hour": 15,
+    "minute": 30
+  }
+}

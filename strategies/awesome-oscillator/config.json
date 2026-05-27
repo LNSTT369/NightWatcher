@@ -1,0 +1,27 @@
+{
+  "watchlist": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "META",
+    "GOOGL",
+    "TSLA",
+    "COIN",
+    "PLTR",
+    "HOOD"
+  ],
+  "fast_period": 5,
+  "slow_period": 34,
+  "notional_per_trade": 500,
+  "max_positions": 3,
+  "poll_interval_ms": 300000,
+  "allowed_regimes": [
+    "trending_bull",
+    "low_volatility"
+  ],
+  "time_exit_et": {
+    "hour": 15,
+    "minute": 30
+  }
+}

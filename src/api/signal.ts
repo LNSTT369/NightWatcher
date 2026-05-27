@@ -21,19 +21,33 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders() });
 }
 
-function checkAuth(request: Request, env: Env): Response | null {
-  if (!env.SIGNAL_API_KEY) return null;
+async function checkAuth(request: Request, env: Env): Promise<{ key_id: string; weight: number } | Response> {
   const auth = request.headers.get("Authorization");
   const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
-  if (token !== env.SIGNAL_API_KEY) {
-    return json({ ok: false, error: "UNAUTHORIZED", message: "Invalid or missing Bearer token" }, 401);
+  if (!token) {
+    return json({ ok: false, error: "UNAUTHORIZED", message: "Missing Bearer token" }, 401);
   }
-  return null;
+
+  const db = createD1Client(env.DB);
+  try {
+    const row = await db.executeOne<{ key_id: string; credibility_weight: number }>(
+      "SELECT key_id, credibility_weight FROM api_keys WHERE token_hash = ? AND (revoked = 0 OR revoked IS NULL)",
+      [token]
+    );
+
+    if (!row) {
+      return json({ ok: false, error: "UNAUTHORIZED", message: "Invalid or revoked Bearer token" }, 401);
+    }
+
+    return { key_id: row.key_id, weight: row.credibility_weight };
+  } catch (err) {
+    return json({ ok: false, error: "INTERNAL_ERROR", message: "Database authentication failure" }, 500);
+  }
 }
 
 export async function handleSignalPost(request: Request, env: Env): Promise<Response> {
-  const authErr = checkAuth(request, env);
-  if (authErr) return authErr;
+  const authRes = await checkAuth(request, env);
+  if (authRes instanceof Response) return authRes;
 
   let body: Record<string, unknown>;
   try {
@@ -128,8 +142,8 @@ export async function handleSignalPost(request: Request, env: Env): Promise<Resp
 }
 
 export async function handleSignalGet(request: Request, env: Env, id: string): Promise<Response> {
-  const authErr = checkAuth(request, env);
-  if (authErr) return authErr;
+  const authRes = await checkAuth(request, env);
+  if (authRes instanceof Response) return authRes;
 
   try {
     const db = createD1Client(env.DB);

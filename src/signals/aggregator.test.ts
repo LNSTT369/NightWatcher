@@ -70,4 +70,19 @@ describe("Signal Aggregator - Weighted Belief Aggregation", () => {
     const result = aggregateSignals(signals);
     expect(result.final_direction).toBe("neutral");
   });
+
+  it("honors dynamic convictionThresholdOverride when provided", () => {
+    // Bullish signal with confidence 0.25 (net certainty will be around 0.25)
+    // By default 0.25 >= 0.15, so it would be long.
+    // If override is 0.5, then 0.25 < 0.5, so it should resolve to neutral.
+    const signals = [
+      createSignal({ source: "llm", direction: "long", confidence: 0.25 }),
+    ];
+
+    const resultDefault = aggregateSignals(signals);
+    expect(resultDefault.final_direction).toBe("long");
+
+    const resultWithOverride = aggregateSignals(signals, { convictionThresholdOverride: 0.5 });
+    expect(resultWithOverride.final_direction).toBe("neutral");
+  });
 });

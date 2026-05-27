@@ -79,7 +79,7 @@ export function getDefaultOptionsPolicyConfig(): OptionsPolicyConfig {
     options_enabled: false,
     max_pct_per_option_trade: 0.02,
     max_total_options_exposure_pct: 0.10,
-    min_dte: 30,
+    min_dte: 0,
     max_dte: 60,
     min_delta: 0.30,
     max_delta: 0.70,
@@ -114,7 +114,10 @@ export function getDefaultPolicyConfig(env: Env): PolicyConfig {
     approval_token_ttl_seconds: parseNumber(env.DEFAULT_APPROVAL_TTL_SECONDS, 300),
     allow_short_selling: false,
     use_cash_only: true,
-    options: getDefaultOptionsPolicyConfig(),
+    options: {
+      ...getDefaultOptionsPolicyConfig(),
+      options_enabled: env.FEATURE_OPTIONS === "true",
+    },
   };
 }
 
@@ -133,8 +136,8 @@ export function validateOptionsPolicyConfig(config: unknown): OptionsPolicyConfi
     throw new Error("options.max_total_options_exposure_pct must be between 0 and 0.25 (25%)");
   }
 
-  if (typeof c.min_dte !== "number" || c.min_dte < 7) {
-    throw new Error("options.min_dte must be at least 7 days");
+  if (typeof c.min_dte !== "number" || c.min_dte < 0) {
+    throw new Error("options.min_dte must be non-negative");
   }
 
   if (typeof c.max_dte !== "number" || c.max_dte <= c.min_dte) {

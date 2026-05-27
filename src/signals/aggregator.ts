@@ -17,13 +17,14 @@ function isExpired(signal: AlphaSignal): boolean {
 export interface AggregatorOptions {
   // Per-source weight overrides (e.g. for a specific external counterparty)
   sourceWeightOverrides?: Partial<Record<string, number>>;
+  convictionThresholdOverride?: number; // Threshold below which final direction resolves to neutral
 }
 
 export function aggregateSignals(
   signals: AlphaSignal[],
   options: AggregatorOptions = {}
 ): AggregatedSignal {
-  const { sourceWeightOverrides = {} } = options;
+  const { sourceWeightOverrides = {}, convictionThresholdOverride } = options;
 
   const symbol = signals[0]?.symbol ?? "";
 
@@ -67,7 +68,7 @@ export function aggregateSignals(
 
   if (maxPossibleScore > 0) {
     const net_certainty = totalConviction / maxPossibleScore;
-    const conviction_threshold = 0.15; // Threshold below which direction is neutral
+    const conviction_threshold = convictionThresholdOverride ?? 0.15; // Dynamic or fallback threshold
 
     if (Math.abs(net_certainty) >= conviction_threshold) {
       final_direction = net_certainty > 0 ? "long" : "short";

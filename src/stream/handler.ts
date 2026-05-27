@@ -18,16 +18,34 @@ type StreamOutbound =
   | { type: "pong"; ts: string }
   | { type: "error"; message: string };
 
-export function handleStreamConnection(request: Request, env: Env): Response {
-  if (env.SIGNAL_API_KEY) {
-    const auth = request.headers.get("Authorization");
-    const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
-    if (token !== env.SIGNAL_API_KEY) {
+export async function handleStreamConnection(request: Request, env: Env): Promise<Response> {
+  const auth = request.headers.get("Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) {
+    return new Response(
+      JSON.stringify({ error: "UNAUTHORIZED", message: "Missing Bearer token" }),
+      { status: 401, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  const db = createD1Client(env.DB);
+  try {
+    const row = await db.executeOne(
+      "SELECT key_id FROM api_keys WHERE token_hash = ? AND (revoked = 0 OR revoked IS NULL)",
+      [token]
+    );
+
+    if (!row) {
       return new Response(
-        JSON.stringify({ error: "UNAUTHORIZED", message: "Invalid or missing Bearer token" }),
+        JSON.stringify({ error: "UNAUTHORIZED", message: "Invalid or revoked Bearer token" }),
         { status: 401, headers: { "Content-Type": "application/json" } }
       );
     }
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: "INTERNAL_ERROR", message: "Database authentication failure" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 
   const upgrade = request.headers.get("Upgrade");

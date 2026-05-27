@@ -10,7 +10,7 @@ compatibility_flags = ["nodejs_compat"]
 ENVIRONMENT = "development"
 # Feature flags
 FEATURE_LLM_RESEARCH = "true"
-FEATURE_OPTIONS = "false"
+FEATURE_OPTIONS = "true"
 # Default policy (can be overridden in D1)
 DEFAULT_MAX_POSITION_PCT = "0.20"
 DEFAULT_MAX_NOTIONAL_PER_TRADE = "10000"

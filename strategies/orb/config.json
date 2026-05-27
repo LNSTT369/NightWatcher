@@ -1,42 +1,147 @@
 {
   "_watchlist_rule": "Backtest-validated (100+ trades, long-only, costs included). Core: AMZN, AAPL, IRM, SPY, QQQ. High-vol: TSLA, COIN. Watch: PLTR, HOOD, ABNB.",
-  "watchlist": ["AMZN","TSLA","AAPL","IRM","SPY","QQQ","COIN","PLTR","HOOD","ABNB"],
+  "watchlist": [
+    "AMZN",
+    "TSLA",
+    "AAPL",
+    "IRM",
+    "SPY",
+    "QQQ",
+    "COIN",
+    "PLTR",
+    "HOOD",
+    "ABNB",
+    "ABBV",
+    "ADBE",
+    "AMAT",
+    "AMD",
+    "AMGN",
+    "ASML",
+    "AVGO",
+    "BMY",
+    "BSX",
+    "CI",
+    "CL",
+    "CMG",
+    "COST",
+    "CRM",
+    "CSCO",
+    "EL",
+    "GILD",
+    "HD",
+    "INTC",
+    "INTU",
+    "ISRG",
+    "JNJ",
+    "KO",
+    "LLY",
+    "LOW",
+    "LRCX",
+    "LULU",
+    "MCD",
+    "MDT",
+    "MRK",
+    "MU",
+    "NFLX",
+    "NKE",
+    "NOW",
+    "ORCL",
+    "PANW",
+    "PEP",
+    "PFE",
+    "PG",
+    "QCOM",
+    "REGN",
+    "SBUX",
+    "SYK",
+    "TGT",
+    "TJX",
+    "TXN",
+    "UNH",
+    "VRTX",
+    "WMT",
+    "JPM",
+    "BAC",
+    "MS",
+    "GS",
+    "WFC",
+    "V",
+    "MA",
+    "XOM",
+    "CVX",
+    "SLB",
+    "COP",
+    "CAT",
+    "GE",
+    "HON",
+    "UNP",
+    "LMT",
+    "DIS",
+    "CMCSA",
+    "VZ",
+    "T"
+  ],
   "orb_timeframe": "1Hour",
+  "dual_thrust": {
+    "enabled": true,
+    "lookback_days": 5,
+    "param_k1": 0.5,
+    "param_k2": 0.5
+  },
   "breakout_buffer_pct": 0.1,
-  "rr_default": 2.0,
+  "rr_default": 2,
   "rr_by_symbol": {
-    "AMZN": 2.0,
-    "TSLA": 3.0,
+    "AMZN": 2,
+    "TSLA": 3,
     "AAPL": 1.5,
-    "IRM":  2.0,
-    "COIN": 2.0,
+    "IRM": 2,
+    "COIN": 2,
     "HOOD": 1.5,
-    "PLTR": 2.0,
+    "PLTR": 2,
     "ABNB": 1.5
   },
   "max_positions": 3,
   "notional": 500,
   "risk_per_trade_usd": 5,
   "poll_interval_ms": 300000,
-  "entry_cutoff_et": { "hour": 12, "minute": 0 },
-  "time_exit_et":    { "hour": 15, "minute": 55 },
+  "entry_cutoff_et": {
+    "hour": 12,
+    "minute": 0
+  },
+  "time_exit_et": {
+    "hour": 15,
+    "minute": 55
+  },
   "filters": {
     "adr": {
       "enabled": true,
       "lookback_days": 20,
       "min_pct": 1.5,
       "caution_pct": 1.2,
-      "exempt_symbols": ["SPY", "QQQ"]
+      "exempt_symbols": [
+        "SPY",
+        "QQQ"
+      ]
     },
     "narrow_range": {
       "enabled": true,
       "lookback_days": 20,
       "percentile_max": 0.5,
-      "exempt_symbols": ["TSLA", "COIN"]
+      "exempt_symbols": [
+        "TSLA",
+        "COIN"
+      ]
     },
     "regime": {
       "enabled": true,
-      "block_in": ["bearish"]
+      "block_in": [
+        "bearish"
+      ]
+    },
+    "rvol": {
+      "_note": "Disabled until sufficient hourly bar history accumulates. Enable once watchlist has 20+ trading days of data.",
+      "enabled": false,
+      "min_ratio": 2.5
     }
   }
 }

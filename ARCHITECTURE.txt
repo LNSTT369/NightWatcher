@@ -10,28 +10,39 @@ NIGHTWATCHER V2
 │   └── vite.config.ts       # Vite Build Configuration
 │
 ├── src/                     # Core Backend logic
-│   ├── policy/              # Decision & Risk Engine
-│   │   ├── engine.ts        # Strategy Execution
-│   │   └── approval.ts      # Trade Validation
-│   ├── providers/           # API Integrations
-│   │   ├── alpaca/          # Brokerage (Trading/Market Data)
-│   │   ├── llm/             # AI Models (Gemini, OpenAI, Ollama)
-│   │   └── social/          # Sentiment (Stocktwits, SEC)
+│   ├── api/                 # API Routes & Webhooks
+│   ├── durable-objects/     # Cloudflare Durable Objects for State
+│   ├── execution/           # Order Execution Logic
+│   ├── jobs/                # Scheduled Tasks (Cron)
+│   ├── lib/                 # Shared Utilities and Libraries
+│   ├── mcp/                 # Model Context Protocol implementations
+│   ├── policy/              # Decision Engine
+│   ├── providers/           # Integrations (alpaca, llm, news, social)
+│   ├── regime/              # Market Regime Detection
+│   ├── risk/                # Risk Management
+│   ├── signals/             # Trading Signals
 │   ├── storage/             # Data Persistence
-│   │   ├── d1/              # Relational (Trades, Logs)
-│   │   ├── kv/              # Cache/Session State
-│   │   └── r2/              # Object Storage
-│   └── jobs/                # Scheduled Tasks (Cron)
+│   └── stream/              # Real-time Data Streaming
 │
 ├── migrations/              # Database Schema Definitions
-│   ├── 0001_initial_schema.sql
-│   ├── 0002_memory_tables.sql
-│   └── 0003_events_tables.sql
 │
 ├── scripts/                 # CLI Tools & Manual Controls
-│   ├── buy.mjs / sell.mjs   # Manual Trade Execution
-│   ├── positions.mjs        # Portfolio Overview
-│   └── verify-gemini.ts     # AI Connectivity Tests
 │
-└── Worked ON/                # Documentation & Roadmaps
-    └── NIGHTWATCHER_V3_ROADMAP.md
+├── strategies/              # Automated Trading Strategies
+│   ├── awesome-oscillator/
+│   ├── futures-hedge/
+│   ├── gap-and-go/
+│   ├── mean-reversion/
+│   ├── momentum-breakout/
+│   ├── options-momentum/
+│   ├── orb/
+│   ├── pair-trading/
+│   └── vwap-reversion/
+│
+├── elon-advisor/            # Elon Musk AI Advisor
+├── jobs-advisor/            # Steve Jobs AI Advisor
+├── naval-advisor/           # Naval Ravikant AI Advisor
+│
+├── nightwatcher-research/   # Research & Backtesting
+│
+└── Worked ON/               # Documentation & Roadmaps

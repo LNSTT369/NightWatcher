@@ -1,262 +1,316 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  /* void black foundation */
-  --color-hud-bg: #07090a;
-  --color-hud-bg-panel: #0b0e11;
+  /* Premium Brutalist Monochrome Foundation */
+  --color-hud-bg: #ffffff;
+  --color-hud-bg-panel: #ffffff;
 
-  /* amber phosphor — the dominant accent */
-  --color-hud-primary: #c07c20;
-  --color-hud-dim: #382810;
-  --color-hud-line: rgba(192, 124, 32, 0.09);
-  --color-hud-border: rgba(192, 124, 32, 0.18);
+  /* Primary controls and active states - Pure Solid Black */
+  --color-hud-primary: #000000;
+  --color-hud-dim: #666666;
+  --color-hud-line: #cccccc;
+  --color-hud-border: #000000;
 
-  /* phosphor text scale */
-  --color-hud-text: #8a7450;
-  --color-hud-text-dim: #4a3e28;
-  --color-hud-text-bright: #e0c888;
+  /* High contrast typography scale */
+  --color-hud-text: #000000;
+  --color-hud-text-dim: #555555;
+  --color-hud-text-bright: #000000;
 
-  /* signal colors */
-  --color-hud-success: #28c870;   /* electric jade */
-  --color-hud-warning: #d87820;   /* amber-orange */
-  --color-hud-error: #e83838;     /* crimson */
-  --color-hud-purple: #8858c0;    /* violet */
-  --color-hud-cyan: #48a0c0;      /* ice */
-  --color-hud-blue: #4878c0;
-  --color-hud-green: #28c870;
-  --color-hud-yellow: #e0a030;
-  --color-hud-red: #e83838;
+  /* Strict solid high-contrast indicators (No glowing effects) */
+  --color-hud-success: #0e7a0d;
+  --color-hud-warning: #c25e00;
+  --color-hud-error: #cc1111;
+  --color-hud-purple: #5c0cb8;
+  --color-hud-cyan: #05619c;
+  --color-hud-blue: #0b4f8c;
+  --color-hud-green: #0e7a0d;
+  --color-hud-yellow: #a67300;
+  --color-hud-red: #cc1111;
 
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
-  --font-display: 'Oswald', 'Impact', sans-serif;
-  --font-label: 'Barlow Condensed', 'Oswald', sans-serif;
+  /* Primary IBM Plex Mono Font Family */
+  --font-mono: 'IBM Plex Mono', 'Courier New', Courier, monospace;
+  --font-display: 'IBM Plex Mono', monospace;
+  --font-label: 'IBM Plex Mono', monospace;
 }
 
-/* warm parchment light theme */
-:root.light {
-  --color-hud-bg: #f2ede0;
-  --color-hud-bg-panel: #faf6ec;
-  --color-hud-primary: #9a6010;
-  --color-hud-dim: #d8c89a;
-  --color-hud-line: rgba(154, 96, 16, 0.14);
-  --color-hud-border: rgba(154, 96, 16, 0.22);
-  --color-hud-text: #5a4220;
-  --color-hud-text-dim: #8a7050;
-  --color-hud-text-bright: #180e00;
-  --color-hud-success: #187840;
-  --color-hud-warning: #a05010;
-  --color-hud-error: #b82020;
-  --color-hud-purple: #602898;
-  --color-hud-cyan: #205878;
+/* Force light colors and pure monochrome styling */
+:root, :root.light {
+  --color-hud-bg: #ffffff;
+  --color-hud-bg-panel: #ffffff;
+  --color-hud-primary: #000000;
+  --color-hud-dim: #666666;
+  --color-hud-line: #cccccc;
+  --color-hud-border: #000000;
+  --color-hud-text: #000000;
+  --color-hud-text-dim: #555555;
+  --color-hud-text-bright: #000000;
+
+  --color-hud-success: #0e7a0d;
+  --color-hud-warning: #c25e00;
+  --color-hud-error: #cc1111;
+  --color-hud-purple: #5c0cb8;
+  --color-hud-cyan: #05619c;
 }
 
-/* ─── Keyframes ─────────────────────────────────────────────────── */
-@keyframes nw-scan {
-  0%   { transform: translateY(-80px); }
-  100% { transform: translateY(100vh); }
-}
-
-@keyframes nw-pulse-ring {
-  0%   { transform: scale(1); opacity: 0.9; }
-  100% { transform: scale(2.8); opacity: 0; }
-}
-
-@keyframes nw-flicker {
-  0%, 89%, 91%, 94%, 96%, 100% { opacity: 1; }
-  90%  { opacity: 0.82; }
-  93%  { opacity: 0.92; }
-  95%  { opacity: 0.86; }
-}
-
-@keyframes nw-regime-pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.4; }
+/* ─── Global Overrides for Brutalist Vibe ───────────────────────── */
+* {
+  box-sizing: border-box;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  transition: none !important;
+  font-family: 'IBM Plex Mono', monospace !important;
 }
 
 /* ─── Base ──────────────────────────────────────────────────────── */
 @layer base {
-  * { box-sizing: border-box; }
-
   html {
-    font-family: var(--font-mono);
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 10px;
-    background-color: var(--color-hud-bg);
-    color: var(--color-hud-text);
-    letter-spacing: 0.04em;
+    background-color: #ffffff;
+    color: #000000;
+    letter-spacing: 0.02em;
   }
 
   body {
     margin: 0;
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
-    /* amber dot grid overlay — very subtle */
+    background-color: #ffffff;
+    /* Retro fine grid background */
     background-image: radial-gradient(
       circle,
-      rgba(192, 124, 32, 0.022) 1px,
+      #e5e5e5 1px,
       transparent 1px
     );
-    background-size: 26px 26px;
+    background-size: 20px 20px;
   }
 
-  ::-webkit-scrollbar        { width: 3px; height: 3px; }
-  ::-webkit-scrollbar-track  { background: var(--color-hud-bg); }
-  ::-webkit-scrollbar-thumb  { background: var(--color-hud-dim); }
+  /* Clean Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #ffffff;
+    border-left: 1px solid #cccccc;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #000000;
+    border: 1px solid #ffffff;
+  }
 }
 
 /* ─── Components ────────────────────────────────────────────────── */
 @layer components {
 
-  /* drifting scanline */
+  /* Hide scanline completely */
   .nw-scanline {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 80px;
-    background: linear-gradient(
-      180deg,
-      transparent 0%,
-      rgba(192, 124, 32, 0.010) 35%,
-      rgba(192, 124, 32, 0.022) 50%,
-      rgba(192, 124, 32, 0.010) 65%,
-      transparent 100%
-    );
-    pointer-events: none;
-    z-index: 9999;
-    animation: nw-scan 16s linear infinite;
+    display: none !important;
   }
 
-  /* panel with amber left accent + corner brackets */
-  .hud-panel {
+  /* Retro Brutalist Panel (Flat White, Solid Black Border) */
+  .hud-panel, .hud-panel-glass {
     position: relative;
-    background: var(--color-hud-bg-panel);
-    border: 0.5px solid var(--color-hud-line);
-    border-left: 2px solid var(--panel-accent, var(--color-hud-primary));
-    transition: border-left-color 0.6s ease, box-shadow 0.6s ease;
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+    border-left: 2px solid #000000 !important; /* Keep uniform black border */
+    backdrop-filter: none !important;
+    padding: 0;
+    margin: 0;
   }
 
-  /* top-right corner bracket */
-  .hud-panel::before {
-    content: '';
-    position: absolute;
-    top: -1px; right: -1px;
-    width: 7px; height: 7px;
-    border-top: 1px solid var(--panel-accent, var(--color-hud-primary));
-    border-right: 1px solid var(--panel-accent, var(--color-hud-primary));
-    opacity: 0.55;
-    transition: border-color 0.6s ease;
+  .hud-panel:hover, .hud-panel-glass:hover {
+    background-color: #ffffff !important;
+    transform: none !important;
+    border-color: #000000 !important;
   }
 
-  /* bottom-right corner bracket */
-  .hud-panel::after {
-    content: '';
-    position: absolute;
-    bottom: -1px; right: -1px;
-    width: 7px; height: 7px;
-    border-bottom: 1px solid var(--panel-accent, var(--color-hud-primary));
-    border-right: 1px solid var(--panel-accent, var(--color-hud-primary));
-    opacity: 0.35;
-    transition: border-color 0.6s ease;
+  /* Remove all corner brackets from components */
+  .hud-panel::before, .hud-panel::after,
+  .hud-panel-glass::before, .hud-panel-glass::after {
+    display: none !important;
+    content: none !important;
   }
 
-  /* typography */
-  .hud-label {
-    font-family: var(--font-label);
-    font-size: 9px;
-    font-weight: 500;
+  /* Option Table Row Warning Flash */
+  @keyframes brutal-flash {
+    0%, 100% { background-color: #ffffff; }
+    50% { background-color: #f0f0f0; }
+  }
+
+  .nw-option-warning-row {
+    animation: brutal-flash 2.5s ease-in-out infinite !important;
+    border-left: 4px solid #cc1111 !important;
+  }
+
+  .nw-option-purple-row {
+    border-left: 4px solid #5c0cb8 !important;
+  }
+
+  .nw-option-cyan-row {
+    border-left: 4px solid #05619c !important;
+  }
+
+  /* Table Underlines - Grey */
+  table {
+    border-collapse: collapse;
+  }
+
+  tr {
+    border-bottom: 1.5px solid #cccccc !important;
+  }
+
+  th {
+    border-bottom: 2px solid #000000 !important;
+    font-weight: 700 !important;
+    color: #000000 !important;
     text-transform: uppercase;
-    letter-spacing: 0.20em;
-    color: var(--color-hud-text-dim);
+    letter-spacing: 0.1em;
+  }
+
+  td {
+    border-bottom: 1px solid #e5e5e5 !important;
+    color: #000000 !important;
+  }
+
+  /* Typography Scale overrides */
+  .hud-label {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.12em !important;
+    color: #000000 !important;
   }
 
   .hud-value-xl {
-    font-size: 38px;
-    font-weight: 300;
-    letter-spacing: -0.02em;
-    line-height: 1;
-    color: var(--color-hud-text-bright);
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 34px !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.01em !important;
+    line-height: 1.1;
+    color: #000000 !important;
   }
 
   .hud-value-lg {
-    font-size: 24px;
-    font-weight: 300;
-    letter-spacing: -0.01em;
-    line-height: 1;
-    color: var(--color-hud-text-bright);
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 22px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0px !important;
+    line-height: 1.1;
+    color: #000000 !important;
   }
 
   .hud-value-md {
-    font-size: 14px;
-    font-weight: 400;
-    line-height: 1;
-    color: var(--color-hud-text);
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    line-height: 1.2;
+    color: #000000 !important;
   }
 
   .hud-value-sm {
-    font-size: 11px;
-    font-weight: 400;
-    line-height: 1;
-    color: var(--color-hud-text);
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    line-height: 1.2;
+    color: #000000 !important;
   }
 
-  /* form controls */
-  .hud-input {
-    background: var(--color-hud-bg);
-    border: 0.5px solid var(--color-hud-line);
-    border-left: 2px solid var(--color-hud-dim);
-    color: var(--color-hud-text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 6px 10px;
-    outline: none;
-    transition: border-color 0.2s;
+  /* Inputs and Selections (White bg, Black Border) */
+  .hud-input, select, textarea {
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+    color: #000000 !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+    outline: none !important;
   }
-  .hud-input:focus { border-left-color: var(--color-hud-primary); }
 
-  .hud-button {
-    background: transparent;
-    border: 0.5px solid var(--color-hud-primary);
-    color: var(--color-hud-primary);
-    font-family: var(--font-label);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.15em;
-    padding: 8px 16px;
+  .hud-input:focus, select:focus {
+    background: #f5f5f5 !important;
+  }
+
+  /* Buttons - Flat Rectangle inverts on hover */
+  .hud-button, button {
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+    color: #000000 !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    padding: 8px 16px !important;
+    cursor: pointer !important;
+  }
+
+  .hud-button:hover, button:hover {
+    background: #000000 !important;
+    color: #ffffff !important;
+  }
+
+  .hud-button:disabled, button:disabled {
+    opacity: 0.4 !important;
+    background: #ffffff !important;
+    color: #888888 !important;
+    cursor: not-allowed !important;
+  }
+
+  /* Checkboxes styling */
+  input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border: 2px solid #000000 !important;
+    background: #ffffff;
     cursor: pointer;
-    transition: all 0.15s;
+    position: relative;
+    display: inline-block;
+    vertical-align: middle;
   }
-  .hud-button:hover {
-    background: var(--color-hud-primary);
-    color: var(--color-hud-bg);
-  }
-  .hud-button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* brand mark */
+  input[type="checkbox"]:checked::after {
+    content: "■";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    color: #000000;
+  }
+
+  /* Brand Mark (No flickering, just bold uppercase) */
   .nw-brand {
-    font-family: var(--font-display);
-    font-weight: 400;
-    color: var(--color-hud-text-bright);
-    animation: nw-flicker 20s ease-in-out infinite;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-weight: 700 !important;
+    color: #000000 !important;
+    animation: none !important;
   }
 
-  /* live pulse indicator */
+  /* Live Pulse Indicator (Flat retro state circle) */
   .nw-live-dot {
     position: relative;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--color-hud-success);
+    width: 8px;
+    height: 8px;
+    background: #0e7a0d !important;
     flex-shrink: 0;
   }
+
   .nw-live-dot::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: var(--color-hud-success);
-    animation: nw-pulse-ring 2.2s ease-out infinite;
+    display: none !important;
+    content: none !important;
   }
 
-  /* crisis regime pulse */
-  .nw-crisis-pulse {
-    animation: nw-regime-pulse 1.2s ease-in-out infinite;
+  /* Tooltip box overrides */
+  .tooltip-portal, div[style*="z-index: 9999"] {
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+    color: #000000 !important;
   }
 }
+

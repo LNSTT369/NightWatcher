@@ -14,6 +14,7 @@ import type { KellyResult } from "../risk/kelly";
 import type { VaRResult } from "../risk/var";
 import type { CorrelationResult } from "../risk/correlation";
 import type { RegimeState } from "../regime/types";
+import type { FactorExposure } from "../risk/factor";
 
 export interface PolicyContext {
   order?: OrderPreview; // Backwards-compatibility
@@ -28,6 +29,7 @@ export interface PolicyContext {
   varResult?: VaRResult;
   correlationResults?: CorrelationResult[];
   latestRegime?: RegimeState | null;
+  factorLoadings?: Record<string, FactorExposure>;
 }
 
 export class PolicyEngine {
@@ -112,6 +114,8 @@ export class PolicyEngine {
     positions: Position[];
     clock: MarketClock;
     riskState: RiskState;
+    latestRegime?: RegimeState | null;
+    signal_confidence?: number;
   }): PolicyResult {
     const intent: TradeIntent = {
       symbol: ctx.order.contract_symbol,
@@ -121,6 +125,7 @@ export class PolicyEngine {
       limit_price: ctx.order.limit_price,
       time_in_force: ctx.order.time_in_force === "day" ? "day" : "gtc",
       asset_class: "option",
+      signal_confidence: ctx.signal_confidence,
       options: {
         contract_symbol: ctx.order.contract_symbol,
         underlying: ctx.order.underlying,
@@ -137,6 +142,7 @@ export class PolicyEngine {
       positions: ctx.positions,
       clock: ctx.clock,
       riskState: ctx.riskState,
+      latestRegime: ctx.latestRegime,
     });
   }
 
@@ -307,6 +313,10 @@ export class PolicyEngine {
       }
     }
 
+    // Apply factor concentration clamp: if net portfolio Beta > 0.85, scale down position limit by 50%
+    const factorMultiplier = this.checkFactorConcentration(intent, ctx, warnings);
+    positionLimitPct = positionLimitPct * factorMultiplier;
+
     if (positionPct > positionLimitPct) {
       violations.push({
         rule: "max_position_pct",
@@ -320,6 +330,59 @@ export class PolicyEngine {
         message: `Position will be ${(positionPct * 100).toFixed(2)}% of equity, approaching limit`,
       });
     }
+  }
+
+  private checkFactorConcentration(
+    intent: TradeIntent,
+    ctx: PolicyContext,
+    warnings: PolicyWarning[]
+  ): number {
+    if (!ctx.factorLoadings) return 1.0;
+
+    let totalWeightedBeta = 0;
+    const equity = ctx.account.equity || 1.0;
+
+    // 1. Calculate beta for existing positions
+    for (const pos of ctx.positions) {
+      const symbol = pos.symbol.toUpperCase();
+      const loading = ctx.factorLoadings[symbol];
+      const beta = loading ? loading.betaMkt : 1.0; // fallback to 1.0
+      const value = pos.market_value ?? 0;
+
+      if (symbol === intent.symbol.toUpperCase()) continue;
+
+      totalWeightedBeta += (value / equity) * beta;
+    }
+
+    // 2. Add proposed position beta
+    const symbol = intent.symbol.toUpperCase();
+    const loading = ctx.factorLoadings[symbol];
+    const beta = loading ? loading.betaMkt : 1.0;
+
+    const existingPosition = ctx.positions.find(
+      (p) => p.symbol.toUpperCase() === symbol
+    );
+    const existingValue = existingPosition?.market_value ?? 0;
+    const estimatedNotional = intent.side === "buy" 
+      ? this.estimateNotional(intent) 
+      : intent.side === "sell" 
+        ? -this.estimateNotional(intent) 
+        : 0;
+
+    const newPositionValue = existingValue + estimatedNotional;
+    totalWeightedBeta += (newPositionValue / equity) * beta;
+
+    const netPortfolioBeta = totalWeightedBeta;
+
+    if (netPortfolioBeta > 0.85) {
+      warnings.push({
+        rule: "factor_concentration_warning",
+        message: `Net portfolio Market Beta (${netPortfolioBeta.toFixed(3)}) exceeds limit of 0.85. Position limit clamped by 50% to prevent excessive factor concentration.`,
+      });
+      return 0.5;
+    }
+
+    return 1.0;
   }
 
   private checkOpenPositionsLimit(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
@@ -502,10 +565,14 @@ export class PolicyEngine {
       strategy = "long_put";
     } else if (side === "sell" && option_type === "call") {
       const underlying = opt.underlying.toUpperCase();
-      const hasUnderlying = positions.some(p => p.symbol === underlying && Number(p.qty) > 0);
-      strategy = hasUnderlying ? "covered_call" : "short_call";
+      const underlyingPosition = positions.find(p => p.symbol === underlying);
+      const sharesOwned = underlyingPosition ? Number(underlyingPosition.qty) : 0;
+      const sharesNeeded = (intent.qty ?? 0) * 100;
+      strategy = (sharesOwned >= sharesNeeded && sharesNeeded > 0) ? "covered_call" : "short_call";
     } else if (side === "sell" && option_type === "put") {
-      strategy = "cash_secured_put";
+      const collateralNeeded = opt.strike * (intent.qty ?? 0) * 100;
+      const hasCollateral = ctx.account.cash >= collateralNeeded;
+      strategy = hasCollateral ? "cash_secured_put" : "short_put";
     }
 
     if (!strategy) {
@@ -608,19 +675,65 @@ export class PolicyEngine {
   }
 
   private checkOptionsBuyingPower(intent: TradeIntent, ctx: PolicyContext, violations: PolicyViolation[]): void {
-    if (intent.side !== "buy") return;
+    const opt = intent.options!;
+    if (intent.side === "buy") {
+      const estimatedCost = this.estimateOptionsCost(intent);
+      const availableFunds = this.config.use_cash_only ? ctx.account.cash : ctx.account.buying_power;
+      const fundType = this.config.use_cash_only ? "cash" : "buying power";
 
-    const estimatedCost = this.estimateOptionsCost(intent);
-    const availableFunds = this.config.use_cash_only ? ctx.account.cash : ctx.account.buying_power;
-    const fundType = this.config.use_cash_only ? "cash" : "buying power";
+      if (estimatedCost > availableFunds) {
+        violations.push({
+          rule: "options_insufficient_funds",
+          message: `Insufficient ${fundType}: need $${estimatedCost.toFixed(2)}, have $${availableFunds.toFixed(2)}`,
+          current_value: availableFunds,
+          limit_value: estimatedCost,
+        });
+      }
+    } else if (intent.side === "sell") {
+      const positions = ctx.positions ?? [];
+      const option_type = opt.option_type;
 
-    if (estimatedCost > availableFunds) {
-      violations.push({
-        rule: "options_insufficient_funds",
-        message: `Insufficient ${fundType}: need $${estimatedCost.toFixed(2)}, have $${availableFunds.toFixed(2)}`,
-        current_value: availableFunds,
-        limit_value: estimatedCost,
-      });
+      if (option_type === "call") {
+        const underlying = opt.underlying.toUpperCase();
+        const underlyingPosition = positions.find(p => p.symbol === underlying);
+        const sharesOwned = underlyingPosition ? Number(underlyingPosition.qty) : 0;
+        const sharesNeeded = (intent.qty ?? 0) * 100;
+
+        if (sharesOwned < sharesNeeded) {
+          // Naked short call margin requirement estimation
+          const premium = intent.limit_price ?? 0;
+          const marginRequired = (0.20 * opt.strike + premium) * (intent.qty ?? 0) * 100;
+          const availableBP = ctx.account.buying_power;
+
+          if (marginRequired > availableBP) {
+            violations.push({
+              rule: "options_insufficient_margin",
+              message: `Insufficient buying power for naked short call: need $${marginRequired.toFixed(2)} margin, have $${availableBP.toFixed(2)}`,
+              current_value: availableBP,
+              limit_value: marginRequired,
+            });
+          }
+        }
+      } else if (option_type === "put") {
+        const collateralNeeded = opt.strike * (intent.qty ?? 0) * 100;
+        const hasCollateral = ctx.account.cash >= collateralNeeded;
+
+        if (!hasCollateral) {
+          // Naked short put margin requirement estimation
+          const premium = intent.limit_price ?? 0;
+          const marginRequired = (0.20 * opt.strike + premium) * (intent.qty ?? 0) * 100;
+          const availableBP = ctx.account.buying_power;
+
+          if (marginRequired > availableBP) {
+            violations.push({
+              rule: "options_insufficient_margin",
+              message: `Insufficient buying power for short put: need $${marginRequired.toFixed(2)} margin, have $${availableBP.toFixed(2)}`,
+              current_value: availableBP,
+              limit_value: marginRequired,
+            });
+          }
+        }
+      }
     }
   }
 

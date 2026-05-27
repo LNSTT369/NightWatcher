@@ -32,7 +32,14 @@ const monitors = new Map(); // symbol → interval handle
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
+  if (!res || !res.content || !res.content[0] || !res.content[0].text) {
+    return { ok: false, error: "Empty or invalid response structure" };
+  }
+  try {
+    return JSON.parse(res.content[0].text);
+  } catch (err) {
+    return { ok: false, error: err.message, _raw: res.content[0].text };
+  }
 }
 
 function computeVwap(bars) {
@@ -73,22 +80,41 @@ export async function scan(client, state) {
     }
   }
 
-  state.log("SCAN", `Scanning ${cfg.watchlist.join(", ")}`);
+  state.log("SCAN", `Scanning ${cfg.watchlist.length} watchlist symbols`);
+
+  // 1. Fetch historical bars in batch
+  const barsRes = await t(client, "prices-bars-batch", { symbols: cfg.watchlist, timeframe: "5Min", limit: 79 });
+  if (!barsRes.ok) {
+    state.log("SCAN", "Failed to fetch batch prices-bars");
+    return;
+  }
+  const barsMap = barsRes.data.bars || {};
+
+  // 2. Fetch technical signals in batch
+  const batchRes = await t(client, "signals-batch", { symbols: cfg.watchlist, timeframe: "5Min" });
+  if (!batchRes.ok) {
+    state.log("SCAN", "Failed to fetch batch signals");
+    return;
+  }
+  const results = batchRes.data.results || [];
+  const resultsMap = {};
+  for (const r of results) {
+    resultsMap[r.symbol] = r;
+  }
 
   for (const symbol of cfg.watchlist) {
     if (state.traded.has(symbol)) continue;
     if (state.positionsOpened >= cfg.max_positions) break;
 
-    const barsRes = await t(client, "prices-bars", { symbol, timeframe: "5Min", limit: 79 });
-    if (!barsRes.ok || !barsRes.data.bars?.length) continue;
+    const bars5m = barsMap[symbol];
+    if (!bars5m || !bars5m.length) continue;
 
-    const bars5m = barsRes.data.bars;
     const vwap = computeVwap(bars5m);
     const price = bars5m[bars5m.length - 1]?.c;
     if (!price || !vwap) continue;
 
-    const techRes = await t(client, "signals-get", { symbol, timeframe: "5Min" });
-    const rsi = techRes.ok ? techRes.data?.technicals?.rsi_14 : null;
+    const res = resultsMap[symbol];
+    const rsi = res ? res.technicals?.rsi_14 : null;
 
     const deviationPct = ((vwap - price) / vwap) * 100;
     const isUndervwap = deviationPct >= cfg.deviation_pct;

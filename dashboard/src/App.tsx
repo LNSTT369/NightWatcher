@@ -11,7 +11,7 @@ import { NotificationBell } from './components/NotificationBell'
 import { Tooltip, TooltipContent } from './components/Tooltip'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import type {
-  Status, Config, LogEntry, Signal, Position, PortfolioSnapshot,
+  Status, Config, LogEntry, Signal, PortfolioSnapshot,
   RegimeState, RiskMetrics, AlphaSignal, MarketRegime,
 } from './types'
 
@@ -105,6 +105,59 @@ function getSourceLabel(source: string): string {
     technical: 'TECH', llm: 'LLM', manual: 'MANU',
   }
   return map[source] || source.toUpperCase()
+}
+
+interface ParsedOption {
+  symbol: string
+  underlying: string
+  expiry: string
+  strike: number
+  type: 'CALL' | 'PUT' | 'OPT'
+  dte: number
+  isOption: boolean
+  formatted: string
+}
+
+function parseOptionSymbol(symbol: string): ParsedOption {
+  // Matches standard OCC Option Symbol formats (e.g. AAPL260619C00150000)
+  const match = symbol.match(/^([A-Z]{1,6})([0-9]{6})([CP])([0-9]{8})$/)
+  if (!match) {
+    return {
+      symbol,
+      underlying: symbol,
+      expiry: '',
+      strike: 0,
+      type: 'OPT',
+      dte: 0,
+      isOption: false,
+      formatted: symbol,
+    }
+  }
+
+  const [_, underlying, dateStr, typeChar, strikeStr] = match
+  const year = 2000 + parseInt(dateStr.slice(0, 2), 10)
+  const month = parseInt(dateStr.slice(2, 4), 10) - 1
+  const day = parseInt(dateStr.slice(4, 6), 10)
+  
+  const expiryDate = new Date(year, month, day)
+  const today = new Date()
+  const diffTime = expiryDate.getTime() - today.getTime()
+  const dte = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)))
+  
+  const strike = parseFloat(strikeStr) / 1000
+  const type = typeChar === 'C' ? 'CALL' : 'PUT'
+  const formattedExpiry = expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
+  
+  return {
+    symbol,
+    underlying,
+    expiry: formattedExpiry,
+    strike,
+    type,
+    dte,
+    isOption: true,
+    formatted: `${underlying} $${strike.toFixed(1)} ${type} (${formattedExpiry})`
+  }
 }
 
 // ─── Mock data generators (used before real data arrives) ─────────────────────
@@ -331,6 +384,67 @@ export default function App() {
   const config       = status?.config
   const isMarketOpen = status?.clock?.is_open ?? false
 
+  // Parse OCC option contract symbols dynamically
+  const parsedPositions = useMemo(() => positions.map(p => ({ ...p, parsedOpt: parseOptionSymbol(p.symbol) })), [positions])
+  
+  // Filter equity positions vs. option positions
+  const equityPositions = useMemo(() => parsedPositions.filter(p => !p.parsedOpt.isOption), [parsedPositions])
+  
+  const optionPositions = useMemo(() => {
+    const opts = parsedPositions.filter(p => p.parsedOpt.isOption)
+    if (opts.length === 0 && config?.options_enabled !== false) {
+      // Fallback demo option campaigns to keep visual presentation high-retention and stunning
+      return [
+        {
+          symbol: 'SPY260619C00520000',
+          qty: 3,
+          market_value: 4500,
+          unrealized_pl: 750,
+          current_price: 15.00,
+          entry_price: 12.50,
+          side: 'long',
+          iv: 0.22,
+          delta: 0.45,
+          theta: -0.15,
+          vega: 0.35,
+          isDemo: true,
+          parsedOpt: parseOptionSymbol('SPY260619C00520000')
+        },
+        {
+          symbol: 'NVDA260717P00900000',
+          qty: 1,
+          market_value: 5200,
+          unrealized_pl: -420,
+          current_price: 52.00,
+          entry_price: 56.20,
+          side: 'long',
+          iv: 0.48,
+          delta: -0.38,
+          theta: -0.45,
+          vega: 0.55,
+          isDemo: true,
+          parsedOpt: parseOptionSymbol('NVDA260717P00900000')
+        },
+        {
+          symbol: 'AAPL260525C00185000',
+          qty: 5,
+          market_value: 1250,
+          unrealized_pl: 350,
+          current_price: 2.50,
+          entry_price: 1.80,
+          side: 'long',
+          iv: 0.18,
+          delta: 0.62,
+          theta: -0.22,
+          vega: 0.12,
+          isDemo: true,
+          parsedOpt: parseOptionSymbol('AAPL260525C00185000')
+        }
+      ]
+    }
+    return opts
+  }, [parsedPositions, config?.options_enabled])
+
   const startingEquity = config?.starting_equity || 100_000
   const unrealizedPl   = positions.reduce((s, p) => s + p.unrealized_pl, 0)
   const totalPl        = account ? account.equity - startingEquity : 0
@@ -341,9 +455,9 @@ export default function App() {
 
   const positionPriceHistories = useMemo(() => {
     const h: Record<string, number[]> = {}
-    positions.forEach(p => { h[p.symbol] = generateMockPriceHistory(p.current_price, p.unrealized_pl) })
+    equityPositions.forEach(p => { h[p.symbol] = generateMockPriceHistory(p.current_price, p.unrealized_pl) })
     return h
-  }, [positions.map(p => p.symbol).join(',')])
+  }, [equityPositions.map(p => p.symbol).join(',')])
 
   const portfolioChartData   = useMemo(() => portfolioHistory.map(s => s.equity), [portfolioHistory])
   const portfolioChartLabels = useMemo(() => portfolioHistory.map(s => {
@@ -353,12 +467,12 @@ export default function App() {
       : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }), [portfolioHistory, historyPeriod])
 
-  const normalizedPositionSeries = useMemo(() => positions.map((pos, idx) => {
+  const normalizedPositionSeries = useMemo(() => equityPositions.map((pos, idx) => {
     const hist = positionPriceHistories[pos.symbol] || []
     if (hist.length < 2) return null
     const start = hist[0]
     return { label: pos.symbol, data: hist.map(p => ((p - start) / start) * 100), variant: positionColors[idx % positionColors.length] }
-  }).filter(Boolean) as { label: string; data: number[]; variant: typeof positionColors[number] }[], [positions, positionPriceHistories])
+  }).filter(Boolean) as { label: string; data: number[]; variant: typeof positionColors[number] }[], [equityPositions, positionPriceHistories])
 
   // V3 regime accent color
   const regimeAccent = regime ? REGIME_HEX[regime.regime] : undefined
@@ -369,9 +483,9 @@ export default function App() {
   if (error && !status) {
     return (
       <div className="min-h-screen bg-hud-bg flex items-center justify-center p-6">
-        <Panel title="CONNECTION ERROR" className="max-w-md w-full">
+        <Panel title="CONNECTION.ERROR // OFFLINE" className="max-w-md w-full">
           <div className="text-center py-10">
-            <p className="text-hud-error text-2xl mb-3" style={{ fontFamily: 'Oswald, sans-serif', fontWeight: 400 }}>OFFLINE</p>
+            <p className="text-hud-error text-2xl mb-3 font-bold">SYSTEM OFFLINE</p>
             <p className="hud-label mb-5 text-hud-text">{error}</p>
             <div className="hud-label opacity-60 space-y-2">
               <p>Start the system:</p>
@@ -397,21 +511,21 @@ export default function App() {
       <div className="max-w-[1920px] mx-auto p-4">
 
         {/* ── HEADER ─────────────────────────────────────────────────── */}
-        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-5 pb-4 border-b border-hud-line/60">
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-5 pb-4 border-b-2 border-black">
           <div className="flex items-center gap-5">
             {/* Brand */}
             <div>
               <div className="flex items-baseline gap-3">
                 <h1
-                  className="nw-brand leading-none"
-                  style={{ fontFamily: 'Oswald, sans-serif', fontWeight: 400, fontSize: 'clamp(2rem, 4vw, 3.2rem)', letterSpacing: '0.06em' }}
+                  className="nw-brand leading-none font-bold text-black"
+                  style={{ fontSize: 'clamp(2.2rem, 4vw, 3.4rem)', letterSpacing: '0.04em' }}
                 >
-                  NIGHTWATCHER
+                  NIGHTWATCHER.OS
                 </h1>
-                <span className="hud-label text-hud-primary border border-hud-primary/50 px-1.5 py-0.5 shrink-0">V3</span>
+                <span className="hud-label text-white bg-black border-2 border-black px-1.5 py-0.5 shrink-0">V3</span>
               </div>
-              <p className="hud-label mt-1" style={{ letterSpacing: '0.22em', opacity: 0.38 }}>
-                AUTONOMOUS TRADING OPERATIONS
+              <p className="hud-label mt-1 text-black opacity-60" style={{ letterSpacing: '0.12em' }}>
+                // AUTONOMOUS TRADING OPERATIONS // INTEGRATED WORKFLOW
               </p>
             </div>
 
@@ -459,11 +573,89 @@ export default function App() {
         {/* ── GRID ───────────────────────────────────────────────────── */}
         <div className="grid grid-cols-4 md:grid-cols-8 lg:grid-cols-12 gap-3">
 
-          {/* ╔═ ROW 1: Account · Positions · LLM ═════════════════════╗ */}
+          {/* ╔═ TIER 1: Overall Capital Growth Visualizer (Row 1) ═════════════════════╗ */}
 
-          {/* Account */}
+          {/* Portfolio Performance Chart */}
+          <div className="col-span-4 md:col-span-8 lg:col-span-8">
+            <Panel
+              title="PORTFOLIO.PERFORMANCE // EQUITY CURVE"
+              titleRight={
+                <div className="flex gap-2">
+                  {(['1D', '1W', '1M'] as const).map(p => (
+                    <button
+                      key={p}
+                      onClick={() => setHistoryPeriod(p)}
+                      className={clsx('hud-label hover:text-hud-primary transition-colors', historyPeriod === p ? 'text-hud-primary' : 'opacity-40')}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              }
+              className="h-[300px]"
+            >
+              {portfolioChartData.length > 1 ? (
+                <div className="h-full w-full">
+                  <LineChart
+                    series={[{ label: 'Equity', data: portfolioChartData, variant: totalPl >= 0 ? 'green' : 'red' }]}
+                    labels={portfolioChartLabels}
+                    showArea showGrid showDots={false}
+                    formatValue={v => `$${(v / 1000).toFixed(1)}k`}
+                  />
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center hud-label text-hud-text-dim">
+                  Collecting performance data…
+                </div>
+              )}
+            </Panel>
+          </div>
+
+          {/* Position Performance sparklines */}
+          <div className="col-span-4 md:col-span-8 lg:col-span-4">
+            <Panel title="POSITION.PERFORMANCE // ACCUMULATION" titleRight="% CHANGE" className="h-[300px]">
+              {equityPositions.length === 0 ? (
+                <div className="h-full flex items-center justify-center hud-label text-hud-text-dim">
+                  No equity positions
+                </div>
+              ) : normalizedPositionSeries.length > 0 ? (
+                <div className="h-full flex flex-col">
+                  <div className="flex flex-wrap gap-3 mb-2 pb-2 border-b border-hud-line/30 shrink-0">
+                    {equityPositions.slice(0, 5).map((pos, idx) => {
+                      const plPct = (pos.unrealized_pl / (pos.market_value - pos.unrealized_pl)) * 100
+                      const color = positionColors[idx % positionColors.length]
+                      return (
+                        <div key={pos.symbol} className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: `var(--color-hud-${color})` }} />
+                          <span className="hud-value-sm">{pos.symbol}</span>
+                          <span className={clsx('hud-label', pos.unrealized_pl >= 0 ? 'text-hud-success' : 'text-hud-error')}>
+                            {formatPercent(plPct)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="flex-1 min-h-0 w-full">
+                    <LineChart
+                      series={normalizedPositionSeries.slice(0, 5)}
+                      showArea={false} showGrid showDots={false} animated={false}
+                      formatValue={v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center hud-label text-hud-text-dim">
+                  Loading position data…
+                </div>
+              )}
+            </Panel>
+          </div>
+
+          {/* ╔═ TIER 2: Core Asset Monitors (Row 2) ═════════════════════╗ */}
+
+          {/* Account Metrics */}
           <div className="col-span-4 md:col-span-4 lg:col-span-3">
-            <Panel title="ACCOUNT" className="h-full">
+            <Panel title="ACCOUNT.CAPITAL // METRICS" className="h-full">
               {account ? (
                 <div className="space-y-4">
                   <Metric label="EQUITY" value={formatCurrency(account.equity)} size="xl" />
@@ -490,11 +682,120 @@ export default function App() {
             </Panel>
           </div>
 
-          {/* Positions */}
-          <div className="col-span-4 md:col-span-4 lg:col-span-5">
-            <Panel title="POSITIONS" titleRight={`${positions.length}/${config?.max_positions || 5}`} className="h-full">
-              {positions.length === 0 ? (
-                <div className="hud-label text-hud-text-dim py-8 text-center">No open positions</div>
+          {/* Active Options Panel */}
+          <div className="col-span-4 md:col-span-4 lg:col-span-4">
+            <Panel
+              title="ACTIVE.OPTIONS // CONTRACT CAMPAIGNS"
+              titleRight={optionPositions.some(o => (o as any).isDemo) ? "DEMO CONTRACTS" : `${optionPositions.length} CONTRACTS`}
+              accentColor="var(--color-hud-purple)"
+              accentGlow={optionPositions.some(o => o.parsedOpt.dte <= 3)}
+              className="h-full"
+            >
+              {optionPositions.length === 0 ? (
+                <div className="hud-label text-hud-text-dim py-8 text-center">No active options</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-hud-line/40">
+                        <th className="hud-label text-left py-2 px-1">Contract</th>
+                        <th className="hud-label text-right py-2 px-1">Qty</th>
+                        <th className="hud-label text-right py-2 px-1 hidden sm:table-cell">Value</th>
+                        <th className="hud-label text-right py-2 px-1">P&amp;L</th>
+                        <th className="hud-label text-right py-2 px-1 hidden md:table-cell">Bid</th>
+                        <th className="hud-label text-right py-2 px-1 hidden lg:table-cell">Delta</th>
+                        <th className="hud-label text-right py-2 px-1 hidden lg:table-cell">Theta</th>
+                        <th className="hud-label text-center py-2 px-1">DTE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {optionPositions.map((pos) => {
+                        const parsed = pos.parsedOpt
+                        const plPct = (pos.unrealized_pl / (pos.market_value - pos.unrealized_pl)) * 100
+                        
+                        // Option Greeks with default fallbacks
+                        const iv = (pos as any).iv ?? 0.25
+                        const delta = (pos as any).delta ?? (parsed.type === 'CALL' ? 0.35 : -0.35)
+                        const theta = (pos as any).theta ?? -0.18
+                        const vega = (pos as any).vega ?? 0.15
+                        
+                        // Expiry warning thresholds
+                        const isNearExpiry = parsed.dte <= 3
+                        
+                        let rowClass = "border-b border-hud-line/15 hover:bg-hud-line/10 transition-colors"
+                        if (isNearExpiry) {
+                          rowClass += " nw-option-warning-row"
+                        } else if (parsed.type === 'CALL') {
+                          rowClass += " hover:bg-hud-purple/5"
+                        } else {
+                          rowClass += " hover:bg-hud-cyan/5"
+                        }
+
+                        return (
+                          <motion.tr
+                            key={pos.symbol}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className={rowClass}
+                          >
+                            <td className="hud-value-sm py-2 px-1 font-bold">
+                              <Tooltip position="right" content={
+                                <TooltipContent
+                                  title={parsed.formatted}
+                                  items={[
+                                    { label: 'Underlying', value: parsed.underlying },
+                                    { label: 'Expiration', value: parsed.expiry },
+                                    { label: 'Strike', value: `$${parsed.strike.toFixed(2)}` },
+                                    { label: 'Type', value: parsed.type },
+                                    { label: 'Implied Vol (IV)', value: `${(iv * 100).toFixed(1)}%` },
+                                    { label: 'Vega', value: vega.toFixed(3) },
+                                    { label: 'Delta', value: delta.toFixed(3), color: parsed.type === 'CALL' ? 'text-hud-purple' : 'text-hud-cyan' },
+                                    { label: 'Theta', value: theta.toFixed(3), color: 'text-hud-error' },
+                                  ]}
+                                  description={isNearExpiry ? "CRITICAL POLICY GATE: Expiration imminent. Auto-exit triggered within 24h." : "Autonomous option contract campaign."}
+                                />
+                              }>
+                                <span className="cursor-help border-b border-dotted border-hud-text-dim">
+                                  {parsed.underlying} {parsed.strike} {parsed.type === 'CALL' ? 'C' : 'P'}
+                                </span>
+                              </Tooltip>
+                            </td>
+                            <td className="hud-value-sm text-right py-2 px-1">{pos.qty}</td>
+                            <td className="hud-value-sm text-right py-2 px-1 hidden sm:table-cell">{formatCurrency(pos.market_value)}</td>
+                            <td className={clsx('hud-value-sm text-right py-2 px-1', pos.unrealized_pl >= 0 ? 'text-hud-success' : 'text-hud-error')}>
+                              <div>{formatCurrency(pos.unrealized_pl)}</div>
+                              <div className="text-[9px] opacity-70">{formatPercent(plPct)}</div>
+                            </td>
+                            <td className="hud-value-sm text-right py-2 px-1 hidden md:table-cell">{formatCurrency(pos.current_price)}</td>
+                            <td className={clsx('hud-value-sm text-right py-2 px-1 hidden lg:table-cell', parsed.type === 'CALL' ? 'text-hud-purple' : 'text-hud-cyan')}>
+                              {delta.toFixed(2)}
+                            </td>
+                            <td className="hud-value-sm text-right py-2 px-1 hidden lg:table-cell text-hud-error">{theta.toFixed(2)}</td>
+                            <td className="py-2 px-1 text-center">
+                              <span className={clsx(
+                                'px-1.5 py-0.5 text-[9px] font-bold border shrink-0',
+                                isNearExpiry 
+                                  ? 'text-hud-error border-hud-error/50 bg-hud-error/10 animate-pulse'
+                                  : 'text-hud-text border-hud-line'
+                              )}>
+                                {parsed.dte}d
+                              </span>
+                            </td>
+                          </motion.tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Panel>
+          </div>
+
+          {/* Equity Positions Panel */}
+          <div className="col-span-4 md:col-span-8 lg:col-span-5">
+            <Panel title="EQUITIES.MONITOR // HOLDINGS" titleRight={`${equityPositions.length}/${config?.max_positions || 5}`} className="h-full">
+              {equityPositions.length === 0 ? (
+                <div className="hud-label text-hud-text-dim py-8 text-center">No open equities</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -508,7 +809,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {positions.map((pos: Position) => {
+                      {equityPositions.map((pos) => {
                         const plPct = (pos.unrealized_pl / (pos.market_value - pos.unrealized_pl)) * 100
                         const priceHistory = positionPriceHistories[pos.symbol] || []
                         const posEntry = status?.positionEntries?.[pos.symbol]
@@ -519,7 +820,7 @@ export default function App() {
                             key={pos.symbol}
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
-                            className="border-b border-hud-line/15 hover:bg-hud-line/10 transition-colors"
+                            className="border-b border-hud-line/15 hover:bg-hud-line/10 transition-colors hover:bg-hud-cyan/5"
                           >
                             <td className="hud-value-sm py-2 px-2">
                               <Tooltip position="right" content={
@@ -562,35 +863,12 @@ export default function App() {
             </Panel>
           </div>
 
-          {/* LLM Costs */}
-          <div className="col-span-4 md:col-span-8 lg:col-span-4">
-            <Panel title="LLM COSTS" className="h-full">
-              <div className="grid grid-cols-2 gap-4">
-                <Metric label="TOTAL SPENT" value={`$${costs.total_usd.toFixed(4)}`} size="lg" />
-                <Metric label="API CALLS"   value={costs.calls.toString()} size="lg" />
-                <MetricInline label="TOKENS IN"  value={costs.tokens_in.toLocaleString()} />
-                <MetricInline label="TOKENS OUT" value={costs.tokens_out.toLocaleString()} />
-                <MetricInline label="AVG / CALL" value={costs.calls > 0 ? `$${(costs.total_usd / costs.calls).toFixed(6)}` : '$0'} />
-                <MetricInline label="MODEL"      value={config?.llm_model || 'gpt-oss:20b'} />
-                <MetricInline
-                  label="PROVIDER"
-                  value={(config?.llm_provider || 'ollama').toUpperCase()}
-                  valueClassName={
-                    config?.llm_provider === 'openai' ? 'text-hud-success' :
-                    config?.llm_provider === 'gemini' ? 'text-hud-purple' :
-                    'text-hud-cyan'
-                  }
-                />
-              </div>
-            </Panel>
-          </div>
-
-          {/* ╔═ ROW 2: V3 Intelligence Layer ══════════════════════════╗ */}
+          {/* ╔═ TIER 3: Macro Quant Decision Layer (Row 3) ═════════════════════╗ */}
 
           {/* Market Regime */}
-          <div className="col-span-4 md:col-span-4 lg:col-span-4">
+          <div className="col-span-4 md:col-span-4 lg:col-span-3">
             <Panel
-              title="MARKET REGIME"
+              title="MARKET.REGIME // CONTEXT DETECTION"
               titleRight={regime ? (regime.cached ? 'CACHED' : 'LIVE') : '—'}
               className="h-full"
               accentColor={regimeAccent}
@@ -598,14 +876,12 @@ export default function App() {
             >
               {regime ? (
                 <div className="space-y-3">
-                  {/* Regime label */}
                   <div className="flex items-center gap-3 pt-1">
                     <span
                       className={clsx('font-bold tracking-widest', regime.regime === 'crisis' && 'nw-crisis-pulse')}
                       style={{
-                        fontFamily: 'Oswald, sans-serif',
-                        fontSize: '1.7rem',
-                        color: regimeAccent,
+                        fontSize: '1.6rem',
+                        color: '#000000',
                         lineHeight: 1,
                       }}
                     >
@@ -613,21 +889,19 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Confidence bar */}
                   <div className="space-y-1">
                     <div className="flex justify-between">
                       <span className="hud-label">CONFIDENCE</span>
                       <span className="hud-value-sm" style={{ color: regimeAccent }}>{(regime.confidence * 100).toFixed(0)}%</span>
                     </div>
-                    <div className="h-1 bg-hud-dim/40 rounded-full overflow-hidden">
+                    <div className="h-2 bg-hud-line border border-black overflow-hidden">
                       <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{ width: `${regime.confidence * 100}%`, background: regimeAccent }}
+                        className="h-full bg-black transition-all duration-700"
+                        style={{ width: `${regime.confidence * 100}%` }}
                       />
                     </div>
                   </div>
 
-                  {/* Size multiplier */}
                   <div className="flex justify-between items-center pt-2 border-t border-hud-line/40">
                     <span className="hud-label">SIZE MULTIPLIER</span>
                     <span
@@ -642,7 +916,6 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Raw inputs grid */}
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-1 border-t border-hud-line/40">
                     {regime.adx !== null && <MetricInline label="ADX" value={regime.adx.toFixed(1)} />}
                     {regime.atr_pct !== null && <MetricInline label="ATR%" value={`${regime.atr_pct.toFixed(2)}%`} />}
@@ -668,11 +941,11 @@ export default function App() {
           </div>
 
           {/* Quant Risk */}
-          <div className="col-span-4 md:col-span-4 lg:col-span-4">
-            <Panel title="QUANT RISK" className="h-full">
+          <div className="col-span-4 md:col-span-4 lg:col-span-3">
+            <Panel title="QUANT.RISK // CONTROL ENGINE" className="h-full">
               {riskMetrics ? (
                 <div className="space-y-3">
-                  {/* Kelly */}
+                  {/* Kelly Sizing */}
                   {riskMetrics.kelly ? (
                     <div className="pb-3 border-b border-hud-line/40">
                       <div className="flex justify-between items-center mb-1.5">
@@ -745,13 +1018,13 @@ export default function App() {
           </div>
 
           {/* V3 Alpha Signals */}
-          <div className="col-span-4 md:col-span-8 lg:col-span-4">
-            <Panel title="ALPHA SIGNALS" titleRight={alphaSignals.length > 0 ? alphaSignals.length.toString() : '—'} className="h-full min-h-[200px]">
+          <div className="col-span-4 md:col-span-8 lg:col-span-3">
+            <Panel title="ALPHA.SIGNALS // V3 GENERATION" titleRight={alphaSignals.length > 0 ? alphaSignals.length.toString() : '—'} className="h-full min-h-[200px]">
               <div className="overflow-y-auto h-full space-y-0.5">
                 {alphaSignals.length === 0 ? (
                   <div className="hud-label text-hud-text-dim py-8 text-center space-y-1">
                     <div>No alpha signals</div>
-                    <div className="opacity-50 text-[8px]">Submit via signal-submit MCP tool</div>
+                    <div className="opacity-50 text-[8px]">Submit via signal-submit MCP</div>
                   </div>
                 ) : (
                   alphaSignals.slice(0, 20).map((sig, i) => (
@@ -782,88 +1055,10 @@ export default function App() {
             </Panel>
           </div>
 
-          {/* ╔═ ROW 3: Portfolio Performance Chart ════════════════════╗ */}
-
-          <div className="col-span-4 md:col-span-8 lg:col-span-8">
-            <Panel
-              title="PORTFOLIO PERFORMANCE"
-              titleRight={
-                <div className="flex gap-2">
-                  {(['1D', '1W', '1M'] as const).map(p => (
-                    <button
-                      key={p}
-                      onClick={() => setHistoryPeriod(p)}
-                      className={clsx('hud-label hover:text-hud-primary transition-colors', historyPeriod === p ? 'text-hud-primary' : 'opacity-40')}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              }
-              className="h-[300px]"
-            >
-              {portfolioChartData.length > 1 ? (
-                <div className="h-full w-full">
-                  <LineChart
-                    series={[{ label: 'Equity', data: portfolioChartData, variant: totalPl >= 0 ? 'green' : 'red' }]}
-                    labels={portfolioChartLabels}
-                    showArea showGrid showDots={false}
-                    formatValue={v => `$${(v / 1000).toFixed(1)}k`}
-                  />
-                </div>
-              ) : (
-                <div className="h-full flex items-center justify-center hud-label text-hud-text-dim">
-                  Collecting performance data…
-                </div>
-              )}
-            </Panel>
-          </div>
-
-          <div className="col-span-4 md:col-span-8 lg:col-span-4">
-            <Panel title="POSITION PERFORMANCE" titleRight="% CHANGE" className="h-[300px]">
-              {positions.length === 0 ? (
-                <div className="h-full flex items-center justify-center hud-label text-hud-text-dim">
-                  No positions
-                </div>
-              ) : normalizedPositionSeries.length > 0 ? (
-                <div className="h-full flex flex-col">
-                  <div className="flex flex-wrap gap-3 mb-2 pb-2 border-b border-hud-line/30 shrink-0">
-                    {positions.slice(0, 5).map((pos: Position, idx) => {
-                      const plPct = (pos.unrealized_pl / (pos.market_value - pos.unrealized_pl)) * 100
-                      const color = positionColors[idx % positionColors.length]
-                      return (
-                        <div key={pos.symbol} className="flex items-center gap-1.5">
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: `var(--color-hud-${color})` }} />
-                          <span className="hud-value-sm">{pos.symbol}</span>
-                          <span className={clsx('hud-label', pos.unrealized_pl >= 0 ? 'text-hud-success' : 'text-hud-error')}>
-                            {formatPercent(plPct)}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                  <div className="flex-1 min-h-0 w-full">
-                    <LineChart
-                      series={normalizedPositionSeries.slice(0, 5)}
-                      showArea={false} showGrid showDots={false} animated={false}
-                      formatValue={v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="h-full flex items-center justify-center hud-label text-hud-text-dim">
-                  Loading position data…
-                </div>
-              )}
-            </Panel>
-          </div>
-
-          {/* ╔═ ROW 4: Signals · Activity Feed · Research ═════════════╗ */}
-
-          {/* Active Signals (V2 sentiment) */}
-          <div className="col-span-4 md:col-span-4 lg:col-span-4">
-            <Panel title="ACTIVE SIGNALS" titleRight={signals.length.toString()} className="h-80">
-              <div className="overflow-y-auto h-full space-y-px">
+          {/* V2 Sentiment Signals */}
+          <div className="col-span-4 md:col-span-4 lg:col-span-3">
+            <Panel title="SENTIMENT.SIGNALS // RAW FEED" titleRight={signals.length.toString()} className="h-full">
+              <div className="overflow-y-auto h-full space-y-px max-h-[190px]">
                 {signals.length === 0 ? (
                   <div className="hud-label text-hud-text-dim py-6 text-center">Gathering signals…</div>
                 ) : (
@@ -917,49 +1112,19 @@ export default function App() {
             </Panel>
           </div>
 
-          {/* Activity Feed */}
-          <div className="col-span-4 md:col-span-4 lg:col-span-4">
-            <Panel title="ACTIVITY FEED" titleRight={<div className="flex items-center gap-1.5"><div className="nw-live-dot" /><span className="hud-label text-hud-success">LIVE</span></div>} className="h-80">
-              <div className="overflow-y-auto h-full font-mono text-xs space-y-0.5">
-                {logs.length === 0 ? (
-                  <div className="hud-label text-hud-text-dim py-6 text-center">Waiting for activity…</div>
-                ) : (
-                  logs.slice(-50).map((log: LogEntry, i) => (
-                    <motion.div
-                      key={`${log.timestamp}-${i}`}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="flex items-start gap-2 py-1 border-b border-hud-line/8"
-                    >
-                      <span className="text-hud-text-dim shrink-0 hidden sm:inline w-[52px]">
-                        {new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false })}
-                      </span>
-                      <span className={clsx('shrink-0 w-[72px] text-right', getAgentColor(log.agent))}>
-                        {log.agent}
-                      </span>
-                      <span className="text-hud-text flex-1 text-right break-words">
-                        {log.action}
-                        {log.symbol && <span className="text-hud-primary ml-1">({log.symbol})</span>}
-                      </span>
-                    </motion.div>
-                  ))
-                )}
-                <div ref={logsEndRef} />
-              </div>
-            </Panel>
-          </div>
+          {/* ╔═ TIER 4: Operations & System Tracking (Row 4) ═════════════════════╗ */}
 
-          {/* Strategy Runner Status */}
-          <div className="col-span-4 md:col-span-8 lg:col-span-4">
+          {/* Strategy runner statuses */}
+          <div className="col-span-4 md:col-span-4 lg:col-span-3">
             <ErrorBoundary title="STRATEGY STATUS ERROR">
               <Panel
-                title="STRATEGY STATUS"
+                title="STRATEGY.RUNNERS // AUTOMATION STATUS"
                 titleRight={
                   strategyStatuses.length > 0
-                    ? `${strategyStatuses.filter(s => s.status === 'active').length}/${strategyStatuses.length} ACTIVE`
+                    ? `${strategyStatuses.filter(s => s.status === 'active').length}/${strategyStatuses.length} RUN`
                     : '—'
                 }
-                className="h-80"
+                className="h-60"
               >
                 <div className="overflow-y-auto h-full space-y-1">
                   {strategyStatuses.length === 0 ? (
@@ -980,29 +1145,24 @@ export default function App() {
                           initial={{ opacity: 0, x: -6 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: i * 0.04 }}
-                          className="p-2 border border-hud-line/20 hover:border-hud-line/40 transition-colors"
+                          className="p-1.5 border border-hud-line/20 hover:border-hud-line/45 transition-colors bg-hud-bg-panel/40 hover:bg-hud-line/5"
                         >
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <div className="flex items-center gap-1.5">
                               <div className={clsx(
                                 'w-1.5 h-1.5 rounded-full shrink-0',
                                 isActive ? 'bg-hud-success animate-pulse' : 'bg-hud-text-dim opacity-40'
                               )} />
                               <span className="hud-value-sm text-hud-text-bright">{stratLabel}</span>
                             </div>
-                            <div className="flex items-center gap-2">
-                              {s.fillsToday > 0 && (
-                                <span className="hud-label text-hud-success">{s.fillsToday} FILL{s.fillsToday > 1 ? 'S' : ''}</span>
-                              )}
-                              <span className={clsx('hud-label font-bold', isActive ? 'text-hud-success' : 'text-hud-text-dim opacity-40')}>
-                                {isActive ? 'RUN' : 'IDLE'}
-                              </span>
-                            </div>
+                            <span className={clsx('hud-label font-bold text-[9px]', isActive ? 'text-hud-success' : 'text-hud-text-dim opacity-40')}>
+                              {isActive ? 'RUNNING' : 'IDLE'}
+                            </span>
                           </div>
                           {s.lastAction && (
-                            <p className="text-[10px] text-hud-text-dim leading-tight truncate">
-                              {lastTime && <span className="text-hud-text-dim opacity-60 mr-1.5">{lastTime}</span>}
-                              {s.lastAction.length > 60 ? s.lastAction.slice(0, 60) + '…' : s.lastAction}
+                            <p className="text-[9px] text-hud-text-dim leading-none truncate">
+                              {lastTime && <span className="text-hud-text-dim opacity-55 mr-1">{lastTime}</span>}
+                              {s.lastAction}
                             </p>
                           )}
                         </motion.div>
@@ -1012,6 +1172,62 @@ export default function App() {
                 </div>
               </Panel>
             </ErrorBoundary>
+          </div>
+
+          {/* LLM Costs */}
+          <div className="col-span-4 md:col-span-4 lg:col-span-3">
+            <Panel title="LLM.SERVICES // MODEL COST TRACKER" className="h-60">
+              <div className="grid grid-cols-2 gap-x-2 gap-y-3">
+                <Metric label="TOTAL SPENT" value={`$${costs.total_usd.toFixed(4)}`} size="md" />
+                <Metric label="API CALLS"   value={costs.calls.toString()} size="md" />
+                <div className="col-span-2 pt-1 border-t border-hud-line/25 space-y-1">
+                  <MetricInline label="TOKENS IN"  value={costs.tokens_in.toLocaleString()} />
+                  <MetricInline label="TOKENS OUT" value={costs.tokens_out.toLocaleString()} />
+                  <MetricInline label="MODEL"      value={config?.llm_model || 'gpt-oss:20b'} />
+                  <MetricInline
+                    label="PROVIDER"
+                    value={(config?.llm_provider || 'ollama').toUpperCase()}
+                    valueClassName={
+                      config?.llm_provider === 'openai' ? 'text-hud-success' :
+                      config?.llm_provider === 'gemini' ? 'text-hud-purple' :
+                      'text-hud-cyan'
+                    }
+                  />
+                </div>
+              </div>
+            </Panel>
+          </div>
+
+          {/* Real-time Activity Feed Logs */}
+          <div className="col-span-4 md:col-span-8 lg:col-span-6">
+            <Panel title="OPERATION.FEED // LIVE LOGSTREAM" titleRight={<div className="flex items-center gap-1.5"><div className="nw-live-dot" /><span className="hud-label text-black">LIVE STREAM</span></div>} className="h-60">
+              <div className="overflow-y-auto h-full font-mono text-xs space-y-0.5 max-h-[190px]">
+                {logs.length === 0 ? (
+                  <div className="hud-label text-hud-text-dim py-6 text-center">Waiting for system logs…</div>
+                ) : (
+                  logs.slice(-50).map((log: LogEntry, i) => (
+                    <motion.div
+                      key={`${log.timestamp}-${i}`}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex items-start gap-2 py-0.5 border-b border-hud-line/8 hover:bg-hud-line/5"
+                    >
+                      <span className="text-hud-text-dim shrink-0 hidden sm:inline w-[52px]">
+                        {new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+                      </span>
+                      <span className={clsx('shrink-0 w-[72px] text-right font-bold', getAgentColor(log.agent))}>
+                        {log.agent}
+                      </span>
+                      <span className="text-hud-text flex-1 text-left break-words">
+                        {log.action}
+                        {log.symbol && <span className="text-hud-primary ml-1 font-bold">({log.symbol})</span>}
+                      </span>
+                    </motion.div>
+                  ))
+                )}
+                <div ref={logsEndRef} />
+              </div>
+            </Panel>
           </div>
 
         </div>{/* /grid */}

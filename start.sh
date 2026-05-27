@@ -9,6 +9,7 @@
 # tmux commands:
 #   tmux attach -t nightwatcher       # reattach to running session
 #   tmux kill-session -t nightwatcher # stop everything
+#
 
 set -e
 
@@ -30,7 +31,7 @@ if [ "$1" = "--tmux" ]; then
 fi
 
 if [ $# -eq 0 ]; then
-  STRATEGIES=("momentum-breakout" "orb" "vwap-reversion" "gap-and-go" "mean-reversion" "futures-hedge" "options-momentum")
+  STRATEGIES=("momentum-breakout" "orb" "vwap-reversion" "gap-and-go" "mean-reversion" "futures-hedge" "options-momentum" "pair-trading" "awesome-oscillator")
 else
   STRATEGIES=("$@")
 fi
@@ -46,22 +47,29 @@ MCP_LOG="$LOG_DIR/mcp-$TIMESTAMP.log"
 PIDS=()
 cleanup() {
   echo ""
-  echo "[NIGHTWATCHER] Shutting down..."
+  echo "[NIGHTWATCHER] Shutting down all processes..."
   for pid in "${PIDS[@]}"; do
     kill "$pid" 2>/dev/null && echo "  killed PID $pid"
   done
-  echo "[NIGHTWATCHER] Done."
+  echo "[NIGHTWATCHER] All systems stopped."
 }
 trap cleanup EXIT INT TERM
 
-# ── Start MCP server ──────────────────────────────────────────────────────────
+# ── 0. Run Database Migrations ──────────────────────────────────────────────
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║            NIGHTWATCHER V3 — STARTING                   ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
-echo "[1/4] Starting MCP server (wrangler dev)..."
+echo "[1/5] Applying local database migrations..."
+npm run db:migrate
+echo "      ✓ Migrations applied successfully."
+echo ""
+
+# ── Start MCP server ──────────────────────────────────────────────────────────
+
+echo "[2/5] Starting MCP server (wrangler dev)..."
 echo "      Log: $MCP_LOG"
 
 npm run dev > "$MCP_LOG" 2>&1 &
@@ -87,7 +95,7 @@ echo ""
 # ── Start Dashboard API bridge ────────────────────────────────────────────────
 
 DASH_LOG="$LOG_DIR/dashboard-api-$TIMESTAMP.log"
-echo "[2/4] Starting dashboard API (port 3001)..."
+echo "[3/5] Starting dashboard API (port 3001)..."
 echo "      Log: $DASH_LOG"
 node scripts/dashboard-api.mjs > "$DASH_LOG" 2>&1 &
 DASH_PID=$!
@@ -96,9 +104,21 @@ sleep 1
 
 echo ""
 
+# ── Start Frontend Dashboard UI ───────────────────────────────────────────────
+
+DASH_UI_LOG="$LOG_DIR/dashboard-ui-$TIMESTAMP.log"
+echo "[4/5] Starting Frontend Dashboard UI (port 5173)..."
+echo "      Log: $DASH_UI_LOG"
+npm --prefix dashboard run dev > "$DASH_UI_LOG" 2>&1 &
+DASH_UI_PID=$!
+PIDS+=("$DASH_UI_PID")
+sleep 1
+
+echo ""
+
 # ── Start strategy runners ────────────────────────────────────────────────────
 
-echo "[3/4] Starting strategies..."
+echo "[5/5] Starting strategy runners..."
 for strategy in "${STRATEGIES[@]}"; do
   STRAT_LOG="$LOG_DIR/$strategy-$TIMESTAMP.log"
   echo "      → $strategy  (log: $STRAT_LOG)"
@@ -109,17 +129,19 @@ for strategy in "${STRATEGIES[@]}"; do
 done
 
 echo ""
-echo "[4/4] All systems running."
+echo "=============================================================="
+echo "  All systems successfully running!"
+echo "=============================================================="
 echo ""
-echo "  MCP server:    http://localhost:8787"
-echo "  Dashboard API: http://localhost:3001"
-echo "  Dashboard UI:  cd dashboard && npm run dev  (port 3000)"
+echo "  MCP server:     http://localhost:8787"
+echo "  Dashboard API:  http://localhost:3001"
+echo "  Dashboard UI:   http://localhost:5173"
 for strategy in "${STRATEGIES[@]}"; do
-  echo "  Strategy:      $strategy"
+  echo "  Strategy:       $strategy"
 done
 echo ""
-echo "  Logs:          $LOG_DIR/"
-echo "  Stop:          Ctrl+C"
+echo "  Logs:           $LOG_DIR/"
+echo "  Stop:           Ctrl+C"
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo ""

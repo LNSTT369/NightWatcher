@@ -11,11 +11,14 @@ export interface AlpacaProviders {
   options: AlpacaOptionsProvider;
 }
 
-export function createAlpacaProviders(env: Env): AlpacaProviders {
+export function createAlpacaProviders(
+  env: Env,
+  tenantConfig?: Partial<AlpacaClientConfig>
+): AlpacaProviders {
   const config: AlpacaClientConfig = {
-    apiKey: env.ALPACA_API_KEY,
-    apiSecret: env.ALPACA_API_SECRET,
-    paper: parseBoolean(env.ALPACA_PAPER, true),
+    apiKey: tenantConfig?.apiKey ?? env.ALPACA_API_KEY,
+    apiSecret: tenantConfig?.apiSecret ?? env.ALPACA_API_SECRET,
+    paper: tenantConfig?.paper !== undefined ? tenantConfig.paper : parseBoolean(env.ALPACA_PAPER, true),
   };
 
   const client = createAlpacaClient(config);

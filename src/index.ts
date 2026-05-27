@@ -3,6 +3,8 @@ import { NightwatcherMcpAgent } from "./mcp/agent";
 import { handleCronEvent } from "./jobs/cron";
 import { handleStreamConnection } from "./stream/handler";
 import { handleSignalPost, handleSignalGet } from "./api/signal";
+import { handlePortalGet } from "./api/portal";
+import { handleStrategyDeploy } from "./api/deploy";
 
 export { SessionDO } from "./durable-objects/session";
 export { NightwatcherMcpAgent };
@@ -37,7 +39,9 @@ export default {
           endpoints: {
             health: "/health",
             mcp: "/mcp (via Durable Object)",
+            portal: "/portal",
             signal: "/api/signal",
+            deploy: "/api/signal/deploy",
           },
         }),
         {
@@ -51,7 +55,15 @@ export default {
     }
 
     if (url.pathname === "/stream") {
-      return handleStreamConnection(request, env);
+      return await handleStreamConnection(request, env);
+    }
+
+    if (url.pathname === "/portal" || url.pathname === "/api/signal/portal") {
+      return handlePortalGet(request, env);
+    }
+
+    if (url.pathname === "/api/signal/deploy") {
+      return handleStrategyDeploy(request, env);
     }
 
     if (url.pathname === "/api/signal" && request.method === "POST") {

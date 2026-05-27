@@ -61,6 +61,7 @@ import { calculateKelly } from "../risk/kelly";
 import { calculateSharpe } from "../risk/sharpe";
 import { calculateVaR } from "../risk/var";
 import { calculateCorrelation } from "../risk/correlation";
+import { getFactorLoadings } from "../risk/factor";
 import {
   getJournalReturns,
   getKellyInputs,
@@ -69,7 +70,6 @@ import {
   insertVaRSnapshot,
   insertCorrelationSnapshot,
 } from "../storage/d1/queries/risk_metrics";
-import { buildTwapSchedule, buildVwapSchedule } from "../execution/algos";
 import { calcSlippageMetrics } from "../execution/quality";
 import { routeOrder } from "../execution/sor";
 
@@ -546,6 +546,10 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             activePolicyConfig.max_position_pct_equity = this.policyConfig!.max_position_pct_equity * latestRegime.position_size_multiplier;
           }
 
+          // Fetch Fama-French Factor Loadings from D1 for positions and the candidate symbol
+          const factorSymbols = Array.from(new Set([candidateSymbol, ...positions.map((p) => p.symbol.toUpperCase())]));
+          const factorLoadings = await getFactorLoadings(db, factorSymbols);
+
           const policyEngine = new PolicyEngine(activePolicyConfig);
           const policyResult = policyEngine.evaluate({
             order: preview,
@@ -558,6 +562,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             varResult,
             correlationResults,
             latestRegime,
+            factorLoadings,
           });
 
           if (policyResult.allowed) {
@@ -853,7 +858,10 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
       { symbol: z.string().min(1) },
       async ({ symbol }) => {
         try {
-          const pending = await getPendingSignals(db, symbol.toUpperCase());
+          const [pending, latestRegime] = await Promise.all([
+            getPendingSignals(db, symbol.toUpperCase()),
+            getLatestRegime(db),
+          ]);
 
           if (pending.length === 0) {
             return {
@@ -864,7 +872,12 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             };
           }
 
-          const aggregated = aggregateSignals(pending);
+          const isRegimeFresh = latestRegime && new Date(latestRegime.expires_at).getTime() > Date.now();
+          const convictionThresholdOverride = isRegimeFresh && latestRegime && latestRegime.confidence_threshold_override !== null
+            ? latestRegime.confidence_threshold_override
+            : undefined;
+
+          const aggregated = aggregateSignals(pending, { convictionThresholdOverride });
           const aggId = await insertAggregatedSignal(db, aggregated);
 
           return {
@@ -940,76 +953,8 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
 
   private registerAlgoTools() {
     this.server.tool(
-      "execution-twap",
-      "Generate a TWAP (Time-Weighted Average Price) child order schedule. Splits total_qty into equal slices at regular intervals. Returns array of child orders with qty and earliest submission time. Pure computation — does not submit any orders.",
-      {
-        symbol: z.string().min(1).max(10),
-        side: z.enum(["buy", "sell"]),
-        total_qty: z.number().int().positive().describe("Total shares to execute"),
-        duration_minutes: z.number().positive().describe("Total execution window in minutes (e.g. 60 = spread over 1 hour)"),
-        interval_minutes: z.number().positive().describe("Time between child orders in minutes (e.g. 5 = every 5 minutes)"),
-        start_time_iso: z.string().optional().describe("ISO timestamp to start execution (defaults to now)"),
-      },
-      async (input) => {
-        try {
-          if (input.interval_minutes >= input.duration_minutes) {
-            return {
-              content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "interval_minutes must be less than duration_minutes" }), null, 2) }],
-              isError: true,
-            };
-          }
-          const schedule = buildTwapSchedule({
-            symbol: input.symbol,
-            side: input.side,
-            total_qty: input.total_qty,
-            duration_minutes: input.duration_minutes,
-            interval_minutes: input.interval_minutes,
-            start_time_iso: input.start_time_iso ?? new Date().toISOString(),
-          });
-          return { content: [{ type: "text" as const, text: JSON.stringify(success(schedule), null, 2) }] };
-        } catch (error) {
-          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
-        }
-      }
-    );
-
-    this.server.tool(
-      "execution-vwap",
-      "Generate a VWAP (Volume-Weighted Average Price) child order schedule. Weights each slice by the expected intraday volume at that time using a standard U-shaped volume profile (heavier at open/close, lighter at midday). Returns array of child orders with qty and earliest submission time. Pure computation — does not submit any orders.",
-      {
-        symbol: z.string().min(1).max(10),
-        side: z.enum(["buy", "sell"]),
-        total_qty: z.number().int().positive().describe("Total shares to execute"),
-        duration_minutes: z.number().positive().describe("Total execution window in minutes"),
-        interval_minutes: z.number().positive().describe("Time between child orders in minutes"),
-        start_time_iso: z.string().optional().describe("ISO timestamp to start execution (defaults to now). Important for VWAP: determines which part of the intraday volume curve is used."),
-      },
-      async (input) => {
-        try {
-          if (input.interval_minutes >= input.duration_minutes) {
-            return {
-              content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "interval_minutes must be less than duration_minutes" }), null, 2) }],
-              isError: true,
-            };
-          }
-          const schedule = buildVwapSchedule({
-            symbol: input.symbol,
-            side: input.side,
-            total_qty: input.total_qty,
-            duration_minutes: input.duration_minutes,
-            interval_minutes: input.interval_minutes,
-            start_time_iso: input.start_time_iso ?? new Date().toISOString(),
-          });
-          return { content: [{ type: "text" as const, text: JSON.stringify(success(schedule), null, 2) }] };
-        } catch (error) {
-          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
-        }
-      }
-    );
-
-    this.server.tool(
       "execution-sor-route",
-      "Smart Order Router: given symbol, size, urgency, and signal context, recommend the best venue and execution algorithm. Returns venue (alpaca or institutional), algo type (market/limit/twap/vwap), and suggested algo parameters. Institutional venue stub — defaults to alpaca until Richard's firm API is connected.",
+      "Smart Order Router: given symbol, size, urgency, and signal context, recommend the best venue and execution algorithm. Returns venue (alpaca or institutional), algo type (market/limit), and routing notes. Institutional venue stub — defaults to alpaca until Richard's firm API is connected.",
       {
         symbol: z.string().min(1).max(10),
         side: z.enum(["buy", "sell"]),
@@ -1291,7 +1236,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
           { category: "Options", tools: ["options-expirations", "options-chain", "options-snapshot", "options-order-preview", "options-order-submit"] },
           { category: "Signal", tools: ["signal-submit", "signal-list", "signal-aggregate"] },
           { category: "Execution", tools: ["execution-report", "execution-record-fill"] },
-          { category: "Execution Algos", tools: ["execution-twap", "execution-vwap", "execution-sor-route", "execution-slippage-calc"] },
+          { category: "Execution Algos", tools: ["execution-sor-route", "execution-slippage-calc"] },
           { category: "Regime", tools: ["regime-detect", "regime-history"] },
           { category: "Risk Quant", tools: ["risk-kelly-size", "risk-sharpe", "risk-var", "risk-correlation-check"] },
           { category: "Utility", tools: ["help-usage", "catalog-list"] },
@@ -1510,6 +1455,24 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
     );
 
     this.server.tool(
+      "prices-bars-batch",
+      "Get historical price bars for multiple symbols at once",
+      {
+        symbols: z.array(z.string()).min(1).max(150),
+        timeframe: z.enum(["1Min", "5Min", "15Min", "1Hour", "1Day"]).default("1Day"),
+        limit: z.number().min(1).max(1000).default(100),
+      },
+      async ({ symbols, timeframe, limit }) => {
+        try {
+          const barsMap = await alpaca.marketData.getMultiBars(symbols.map((s) => s.toUpperCase()), timeframe, { limit });
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ count: Object.keys(barsMap).length, bars: barsMap }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
       "market-clock",
       "Get current market clock status",
       {},
@@ -1554,6 +1517,20 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         try {
           const quotes = await alpaca.marketData.getQuotes(symbols.map((s) => s.toUpperCase()));
           return { content: [{ type: "text" as const, text: JSON.stringify(success({ count: Object.keys(quotes).length, quotes }), null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "prices-snapshots",
+      "Get snapshots (latest trade, quote, daily bar, prior close) for multiple symbols at once",
+      { symbols: z.array(z.string()).min(1).max(150) },
+      async ({ symbols }) => {
+        try {
+          const snapshots = await alpaca.marketData.getSnapshots(symbols.map((s) => s.toUpperCase()));
+          return { content: [{ type: "text" as const, text: JSON.stringify(success({ count: Object.keys(snapshots).length, snapshots }), null, 2) }] };
         } catch (error) {
           return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };
         }
@@ -1609,20 +1586,22 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
       "signals-batch",
       "Detect trading signals for multiple symbols at once",
       {
-        symbols: z.array(z.string()).min(1).max(20),
+        symbols: z.array(z.string()).min(1).max(150),
         timeframe: z.enum(["1Min", "5Min", "15Min", "1Hour", "1Day"]).default("1Day"),
       },
       async ({ symbols, timeframe }) => {
         try {
           const results: Array<{ symbol: string; technicals: TechnicalIndicators; signals: Signal[] }> = [];
+          const multiBars = await alpaca.marketData.getMultiBars(symbols.map(s => s.toUpperCase()), timeframe, { limit: 250 });
 
           for (const sym of symbols) {
+            const symUpper = sym.toUpperCase();
             try {
-              const bars = await alpaca.marketData.getBars(sym.toUpperCase(), timeframe, { limit: 250 });
-              if (bars.length >= 20) {
-                const technicals = computeTechnicals(sym.toUpperCase(), bars);
+              const bars = multiBars[symUpper];
+              if (bars && bars.length >= 20) {
+                const technicals = computeTechnicals(symUpper, bars);
                 const signals = detectSignals(technicals);
-                results.push({ symbol: sym.toUpperCase(), technicals, signals });
+                results.push({ symbol: symUpper, technicals, signals });
               }
             } catch {
               continue;
@@ -1966,6 +1945,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         order_type: z.enum(["market", "limit"]),
         limit_price: z.number().positive().optional(),
         time_in_force: z.enum(["day", "gtc"]).default("day"),
+        signal_confidence: z.number().min(0).max(1).optional(),
       },
       async (input) => {
         const startTime = Date.now();
@@ -1977,12 +1957,13 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         }
 
         try {
-          const [account, positions, clock, riskState, snapshot] = await Promise.all([
+          const [account, positions, clock, riskState, snapshot, latestRegime] = await Promise.all([
             alpaca.trading.getAccount(),
             alpaca.trading.getPositions(),
             alpaca.trading.getClock(),
             getRiskState(db),
             this.options.getSnapshot(input.contract_symbol),
+            getLatestRegime(db),
           ]);
 
           const contractParts = this.parseOptionsSymbol(input.contract_symbol);
@@ -2011,13 +1992,22 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             estimated_cost: estimatedCost,
           };
 
-          const policyEngine = new PolicyEngine(this.policyConfig!);
+          // Scale max_position_pct_equity dynamically if we have a fresh market regime state
+          const isRegimeFresh = latestRegime && new Date(latestRegime.expires_at).getTime() > Date.now();
+          const activePolicyConfig = { ...this.policyConfig! };
+          if (isRegimeFresh && latestRegime) {
+            activePolicyConfig.max_position_pct_equity = this.policyConfig!.max_position_pct_equity * latestRegime.position_size_multiplier;
+          }
+
+          const policyEngine = new PolicyEngine(activePolicyConfig);
           const policyResult = policyEngine.evaluateOptionsOrder({
             order: preview,
             account,
             positions,
             clock,
             riskState,
+            latestRegime,
+            signal_confidence: input.signal_confidence,
           });
 
           if (policyResult.allowed) {

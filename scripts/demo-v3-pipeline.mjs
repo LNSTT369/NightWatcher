@@ -168,42 +168,19 @@ async function main() {
     venue: sor.data.venue,
     algo: sor.data.algo,
     rationale: sor.data.rationale,
-    dark_pool_eligible: sor.data.dark_pool_eligible,
   });
 
-  // ── Step 7: Generate execution schedule ──────────────────────────────────
-  hr("7. TWAP Execution Schedule");
-  const startIso = new Date().toISOString();
-  const sched = await tool(client, "execution-twap", {
-    symbol: SYMBOL,
-    side: "buy",
-    total_qty: 3,
-    duration_minutes: 15,
-    interval_minutes: 5,
-    start_time_iso: startIso,
-  });
-  if (!sched.ok) throw new Error("TWAP failed");
-  ok("TWAP schedule generated", {
-    slices: sched.data.slices,
-    start: sched.data.start_time_iso,
-    end: sched.data.end_time_iso,
-  });
-  console.log("\n   Child orders:");
-  for (const child of sched.data.children) {
-    console.log(`     [${child.slice_index}] qty=${child.qty}  weight=${(child.weight*100).toFixed(1)}%  not_before=${child.not_before_iso}`);
-  }
-
-  // ── Step 8: Execute first child via preview → submit ──────────────────────
-  hr("8. Execute Child[0] — orders-preview → orders-submit");
-  const firstChild = sched.data.children[0];
-  console.log(`   Submitting: BUY ${firstChild.qty} ${SYMBOL} (child 0 of ${sched.data.slices})`);
+  // ── Step 7: Order Preview ──────────────────────────────────────────────────
+  hr("7. Order Policy Gate Preview");
+  console.log(`   Previewing: BUY 3 ${SYMBOL} via ${sor.data.algo.toUpperCase()} order`);
 
   const preview = await tool(client, "orders-preview", {
     symbol: SYMBOL,
     side: "buy",
-    qty: firstChild.qty,
-    order_type: "market",
+    qty: 3,
+    order_type: sor.data.algo,
     time_in_force: "day",
+    signal_confidence: agg.data.final_confidence,
   });
 
   if (!preview.ok) {
@@ -223,6 +200,8 @@ async function main() {
     expires_at: preview.data.policy.expires_at,
   });
 
+  // ── Step 8: Order Submission ─────────────────────────────────────────────
+  hr("8. Order Submission");
   const submit = await tool(client, "orders-submit", {
     approval_token: preview.data.policy.approval_token,
   });
@@ -246,11 +225,11 @@ async function main() {
     alpaca_order_id: submit.data.order.id,
     symbol: SYMBOL,
     side: "buy",
-    qty: firstChild.qty,
+    qty: 3,
     ...(fillPrice > 0 && { fill_price: fillPrice }),
     ...(expectedPrice > 0 && { expected_price: expectedPrice }),
     venue: "alpaca",
-    algo_type: "twap",
+    algo_type: sor.data.algo,
     dark_pool_pct: 0,
     aggregated_signal_id: agg.data.aggregated_signal_id,
   });
@@ -277,9 +256,7 @@ async function main() {
 
   // ── Summary ───────────────────────────────────────────────────────────────
   hr("PIPELINE COMPLETE");
-  console.log(`  ${SYMBOL}  BUY ${firstChild.qty} shares @ ~$${fillPrice?.toFixed(2)}`);
-  console.log(`  Remaining schedule: ${sched.data.slices - 1} child orders pending`);
-  console.log(`  (In production: orchestrator submits each at its not_before_iso time)`);
+  console.log(`  ${SYMBOL}  BUY 3 shares @ ~$${fillPrice?.toFixed(2)} using ${sor.data.algo.toUpperCase()}`);
   console.log();
 
   process.exit(0);

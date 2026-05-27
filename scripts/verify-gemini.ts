@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { createGeminiProvider } from './src/providers/llm/gemini';
+import { createGeminiProvider } from '../src/providers/llm/gemini';
 
 const env = fs.readFileSync('.dev.vars', 'utf8')
     .split('\n')

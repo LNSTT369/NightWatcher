@@ -27,7 +27,14 @@ const monitors = new Map();
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
+  if (!res || !res.content || !res.content[0] || !res.content[0].text) {
+    return { ok: false, error: "Empty or invalid response structure" };
+  }
+  try {
+    return JSON.parse(res.content[0].text);
+  } catch (err) {
+    return { ok: false, error: err.message, _raw: res.content[0].text };
+  }
 }
 
 function msUntilET(hour, minute) {
@@ -47,21 +54,23 @@ export async function scan(client, state) {
     return;
   }
 
-  state.log("SCAN", `Scanning ${cfg.watchlist.length} symbols for gap setups`);
-
+  const snapshotRes = await t(client, "prices-snapshots", { symbols: cfg.watchlist });
+  if (!snapshotRes.ok) {
+    state.log("SCAN", "Failed to fetch batch snapshots");
+    return;
+  }
+  const snapshots = snapshotRes.data.snapshots || {};
   const candidates = [];
 
   for (const symbol of cfg.watchlist) {
-    const barsRes = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: 2 });
-    if (!barsRes.ok || barsRes.data.bars?.length < 2) continue;
+    const snap = snapshots[symbol];
+    if (!snap) continue;
 
-    const bars = barsRes.data.bars;
-    const prevClose = bars[bars.length - 2].c;
-    const todayOpen = bars[bars.length - 1].o;
+    const prevClose = snap.prev_daily_bar?.c;
+    const todayOpen = snap.daily_bar?.o;
+    const currentPrice = snap.latest_quote?.ask_price || snap.latest_trade?.price;
 
-    const overview = await t(client, "symbol-overview", { symbol });
-    if (!overview.ok) continue;
-    const currentPrice = overview.data.latest_price;
+    if (prevClose == null || todayOpen == null || currentPrice == null || prevClose === 0) continue;
 
     const gapPct = ((todayOpen - prevClose) / prevClose) * 100;
     const gapSize = todayOpen - prevClose;

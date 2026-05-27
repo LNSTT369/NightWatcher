@@ -4,7 +4,7 @@
 // only the venue assignment changes when institutional is live.
 
 export type Venue = "alpaca" | "institutional";
-export type AlgoType = "market" | "limit" | "twap" | "vwap";
+export type AlgoType = "market" | "limit";
 
 export interface SorInput {
   symbol: string;
@@ -62,39 +62,36 @@ export function routeOrder(input: SorInput): SorDecision {
     };
   }
 
-  // Large notional + session/swing → VWAP to minimize market impact
+  // Large notional + session/swing → Limit order with notes
   if (isDarkPoolEligible) {
-    const durationMins = input.urgency === "swing" ? 390 : 120; // full day vs. 2h
-    notes.push(`VWAP slicing over ${durationMins} minutes reduces market impact for size`);
+    notes.push(`Large order (≥$${(DARK_POOL_THRESHOLD_USD / 1000).toFixed(0)}k) — limit order recommended to prevent market impact`);
+    notes.push(`Advanced VWAP/TWAP order slicing is deferred to the institutional execution venue layer when live`);
     if (isBlockOrder) {
       notes.push("Institutional dark pool would reduce cost further — connect when API is live");
     }
     return {
       venue: "alpaca",
-      algo: "vwap",
+      algo: "limit",
       rationale: isBlockOrder
-        ? "Block order: VWAP via Alpaca (institutional dark pool preferred when available)"
-        : "Large position: VWAP over session minimizes information leakage",
+        ? "Block order: Limit order via Alpaca to avoid slippage (institutional dark pool preferred when available)"
+        : "Large position: Limit order recommended. Execution slicing deferred to venue layer to minimize information leakage",
       dark_pool_eligible: isDarkPoolEligible,
       requires_institutional: isBlockOrder,
       routing_notes: notes,
-      suggested_duration_minutes: durationMins,
-      suggested_interval_minutes: 15,
     };
   }
 
-  // Swing urgency + smaller size → TWAP for disciplined entry over time
+  // Swing urgency + smaller size → Limit order with notes
   if (input.urgency === "swing") {
-    notes.push("Swing trade: TWAP provides consistent fill cadence without intraday concentration");
+    notes.push("Swing trade: Limit order recommended for price protection during entry");
+    notes.push("Advanced execution scheduling (e.g., TWAP) deferred to venue layer");
     return {
       venue: "alpaca",
-      algo: "twap",
-      rationale: "Swing trade: TWAP for predictable, evenly-spaced fills over the session",
+      algo: "limit",
+      rationale: "Swing trade: Limit order recommended for predictable execution boundaries",
       dark_pool_eligible: false,
       requires_institutional: false,
       routing_notes: notes,
-      suggested_duration_minutes: 120,
-      suggested_interval_minutes: 15,
     };
   }
 

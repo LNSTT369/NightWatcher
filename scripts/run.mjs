@@ -29,7 +29,7 @@ const MCP_URL = "http://localhost:8787/mcp";
 const strategyName = process.argv[2];
 if (!strategyName) {
   console.error("Usage: node scripts/run.mjs <strategy-name>");
-  console.error("Available strategies: momentum-breakout, orb, vwap-reversion, gap-and-go, mean-reversion, futures-hedge, options-momentum");
+  console.error("Available strategies: momentum-breakout, orb, vwap-reversion, gap-and-go, mean-reversion, futures-hedge, options-momentum, pair-trading, awesome-oscillator");
   process.exit(1);
 }
 
@@ -104,7 +104,15 @@ async function connectMcp(label) {
       const client = new Client({ name: `v3-${label}`, version: "1.0" }, { capabilities: {} });
       await client.connect(transport);
       const r = await client.callTool({ name: "auth-verify", arguments: {} });
-      const auth = JSON.parse(r.content[0].text);
+      if (!r || !r.content || !r.content[0] || !r.content[0].text) {
+        throw new Error(`Empty or invalid response structure: ${JSON.stringify(r)}`);
+      }
+      let auth;
+      try {
+        auth = JSON.parse(r.content[0].text);
+      } catch (e) {
+        throw new Error(`Invalid JSON response from auth-verify: ${r.content[0].text.substring(0, 200)}`);
+      }
       if (!auth.ok) throw new Error("Alpaca auth failed");
       console.log(`  [${new Date().toISOString()}] MCP connected — paper=${auth.data.paper}  account=${auth.data.account_number}`);
       activeClient = client;
@@ -148,7 +156,7 @@ async function main() {
     strategy = await import(stratPath);
   } catch (err) {
     console.error(`Strategy "${strategyName}" not found at ${stratPath}`);
-    console.error("Available: momentum-breakout, orb, vwap-reversion, gap-and-go, mean-reversion, futures-hedge, options-momentum");
+    console.error("Available: momentum-breakout, orb, vwap-reversion, gap-and-go, mean-reversion, futures-hedge, options-momentum, pair-trading, awesome-oscillator");
     process.exit(1);
   }
 

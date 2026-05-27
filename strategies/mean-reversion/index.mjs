@@ -31,7 +31,91 @@ const monitors = new Map();
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
+  if (!res || !res.content || !res.content[0] || !res.content[0].text) {
+    return { ok: false, error: "Empty or invalid response structure" };
+  }
+  try {
+    return JSON.parse(res.content[0].text);
+  } catch (err) {
+    return { ok: false, error: err.message, _raw: res.content[0].text };
+  }
+}
+
+/**
+ * Detect a Bollinger Bands W-Bottom (Double Bottom) Pattern.
+ * 1. Find local minima (low points) in the last 20 daily bars.
+ * 2. L1: price breaches the lower band (close <= SMA20 - 2 * StdDev).
+ * 3. L2: price forms a higher low, remaining inside/above the lower band (L2 > L1).
+ * Returns { detected: boolean, l1: object, l2: object, diffDays: number }
+ */
+function detectWBottomPattern(bars) {
+  if (!bars || bars.length < 15) return { detected: false };
+  
+  const closes = bars.map(b => b.c);
+  const lows = bars.map(b => b.l);
+  
+  // Find local minima
+  const localMinima = [];
+  for (let i = 1; i < bars.length - 1; i++) {
+    if (lows[i] <= lows[i - 1] && lows[i] <= lows[i + 1]) {
+      const slice = closes.slice(Math.max(0, i - 19), i + 1);
+      if (slice.length >= 5) {
+        const sum = slice.reduce((a, b) => a + b, 0);
+        const mean = sum / slice.length;
+        const variance = slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / slice.length;
+        const stdDev = Math.sqrt(variance);
+        const lowerBand = mean - 2 * stdDev;
+        localMinima.push({ index: i, price: lows[i], lowerBand, close: closes[i] });
+      }
+    }
+  }
+  
+  if (localMinima.length < 2) return { detected: false };
+  
+  for (let idx1 = 0; idx1 < localMinima.length - 1; idx1++) {
+    const l1 = localMinima[idx1];
+    if (l1.price > l1.lowerBand * 1.01) continue; // L1 must touch or breach the lower band
+    
+    for (let idx2 = idx1 + 1; idx2 < localMinima.length; idx2++) {
+      const l2 = localMinima[idx2];
+      const diffDays = l2.index - l1.index;
+      if (diffDays >= 2 && diffDays <= 15) {
+        const isHigherLow = l2.price > l1.price;
+        const staysAboveBand = l2.price >= l2.lowerBand * 0.99;
+        
+        if (isHigherLow && staysAboveBand) {
+          return { detected: true, l1, l2, diffDays };
+        }
+      }
+    }
+  }
+  
+  return { detected: false };
+}
+
+function calculateVolIndicators(bars, currentPrice) {
+  if (!bars || bars.length < 20) return null;
+  
+  // 1. Rolling Z-Score
+  const closes = bars.slice(-20).map(b => b.c);
+  const sum = closes.reduce((a, b) => a + b, 0);
+  const mean = sum / closes.length;
+  const variance = closes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / closes.length;
+  const stdDev = Math.sqrt(variance);
+  const zScore = stdDev > 0 ? (currentPrice - mean) / stdDev : 0;
+  
+  // 2. Average True Range (ATR)
+  const trs = [];
+  for (let i = 1; i < bars.length; i++) {
+    const h = bars[i].h;
+    const l = bars[i].l;
+    const cp = bars[i - 1].c;
+    const tr = Math.max(h - l, Math.abs(h - cp), Math.abs(l - cp));
+    trs.push(tr);
+  }
+  const atr = trs.slice(-14).reduce((a, b) => a + b, 0) / 14;
+
+  return { zScore, mean, stdDev, atr };
 }
 
 function msUntilET(hour, minute) {
@@ -62,43 +146,79 @@ export async function scan(client, state) {
     }
   }
 
-  state.log("SCAN", `Scanning ${cfg.watchlist.join(", ")}`);
+  state.log("SCAN", `Scanning ${cfg.watchlist.length} watchlist symbols`);
+
+  // 1. Fetch historical bars in batch
+  const barsRes = await t(client, "prices-bars-batch", { symbols: cfg.watchlist, timeframe: "1Day", limit: 35 });
+  if (!barsRes.ok) {
+    state.log("SCAN", "Failed to fetch batch prices-bars");
+    return;
+  }
+  const barsMap = barsRes.data.bars || {};
+
+  // 2. Fetch technical signals in batch
+  const batchRes = await t(client, "signals-batch", { symbols: cfg.watchlist, timeframe: "1Day" });
+  if (!batchRes.ok) {
+    state.log("SCAN", "Failed to fetch batch signals");
+    return;
+  }
+  const results = batchRes.data.results || [];
+  const resultsMap = {};
+  for (const r of results) {
+    resultsMap[r.symbol] = r;
+  }
 
   for (const symbol of cfg.watchlist) {
     if (state.traded.has(symbol)) continue;
     if (state.positionsOpened >= cfg.max_positions) break;
 
-    const res = await t(client, "signals-get", { symbol, timeframe: "1Day" });
-    if (!res.ok) continue;
+    const bars = barsMap[symbol];
+    if (!bars || !bars.length) continue;
 
-    const tech = res.data.technicals;
+    const res = resultsMap[symbol];
+    if (!res) continue;
+
+    const tech = res.technicals;
     const price = tech?.price;
-    const sma20 = tech?.sma_20;
     const rsi = tech?.rsi_14;
 
-    if (!price || !sma20) continue;
+    if (!price) continue;
 
-    const deviationPct = ((sma20 - price) / sma20) * 100;
-    const belowSma = deviationPct >= cfg.sma_deviation_pct;
+    const volInds = calculateVolIndicators(bars, price);
+    if (!volInds) continue;
+
+    const { zScore, mean: sma20, stdDev, atr } = volInds;
+    const belowSma = zScore <= -2.0;
     const rsiOk = rsi != null && rsi < cfg.rsi_oversold;
 
-    state.log("MR", `${symbol} price=$${price?.toFixed(2)} sma20=$${sma20?.toFixed(2)} dev=${deviationPct?.toFixed(2)}%`, {
+    // Bollinger W-Bottom Pattern Filter
+    let wBottomOk = true;
+    let wBottomDetails = null;
+    if (cfg.bollinger_pattern_filter?.enabled) {
+      const wRes = detectWBottomPattern(bars);
+      wBottomOk = wRes.detected;
+      wBottomDetails = wRes;
+    }
+
+    state.log("MR", `${symbol} price=$${price.toFixed(2)} sma20=$${sma20.toFixed(2)} zScore=${zScore.toFixed(2)} stdDev=$${stdDev.toFixed(2)} atr=$${atr.toFixed(2)}`, {
       rsi: rsi?.toFixed(1),
+      w_bottom: wBottomOk ? "pass" : "fail",
     });
 
-    if (!belowSma || !rsiOk) continue;
+    if (!belowSma || !rsiOk || !wBottomOk) continue;
 
-    state.log("SIGNAL", `${symbol} — ${deviationPct.toFixed(2)}% below SMA20, RSI ${rsi.toFixed(1)}`);
+    state.log("SIGNAL", `${symbol} — Z-Score ${zScore.toFixed(2)} <= -2.0, RSI ${rsi.toFixed(1)}, W-Bottom Confirmed (L1=$${wBottomDetails.l1.price.toFixed(2)}, L2=$${wBottomDetails.l2.price.toFixed(2)}, separated by ${wBottomDetails.diffDays} days)`);
 
     const qty = Math.max(1, Math.floor(cfg.notional_per_trade / price));
-    const stopPrice = price * (1 - cfg.sma_deviation_pct / 100);
+    // Dynamic stop-loss: 1.5 * ATR below entry price
+    const stopPrice = price - 1.5 * atr;
     const targetPrice = sma20;
 
     await t(client, "signal-submit", {
       source: "technical", symbol, asset_class: "equity",
       direction: "long", confidence: 0.70,
       urgency: "session", horizon: 90,
-      rationale: `Mean reversion. $${deviationPct.toFixed(2)}% below SMA20 ($${sma20.toFixed(2)}). RSI ${rsi.toFixed(1)}.`,
+      rationale: `Mean reversion. Z-Score ${zScore.toFixed(2)} <= -2.0. RSI ${rsi.toFixed(1)}. Dynamic ATR stop $${stopPrice.toFixed(2)}.`,
       regime_tags: state.lastRegime ? [state.lastRegime] : [],
       suggested_notional: cfg.notional_per_trade,
     });

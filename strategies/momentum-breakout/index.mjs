@@ -27,7 +27,51 @@ export const meta = {
 
 async function t(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
-  return JSON.parse(res.content[0].text);
+  if (!res || !res.content || !res.content[0] || !res.content[0].text) {
+    return { ok: false, error: "Empty or invalid response structure" };
+  }
+  try {
+    return JSON.parse(res.content[0].text);
+  } catch (err) {
+    return { ok: false, error: err.message, _raw: res.content[0].text };
+  }
+}
+
+/**
+ * Generate Heikin-Ashi candles from standard daily/hourly bars.
+ * HA_Close = (Open + High + Low + Close) / 4
+ * HA_Open = (Prev_HA_Open + Prev_HA_Close) / 2 (or standard open for first candle)
+ * HA_High = max(High, HA_Open, HA_Close)
+ * HA_Low = min(Low, HA_Open, HA_Close)
+ */
+function computeHeikinAshi(bars) {
+  if (!bars || bars.length === 0) return [];
+  const haBars = [];
+  
+  // First candle
+  let prevOpen = bars[0].o;
+  let prevClose = (bars[0].o + bars[0].h + bars[0].l + bars[0].c) / 4;
+  haBars.push({
+    t: bars[0].t,
+    o: prevOpen,
+    c: prevClose,
+    h: Math.max(bars[0].h, prevOpen, prevClose),
+    l: Math.min(bars[0].l, prevOpen, prevClose),
+  });
+  
+  for (let i = 1; i < bars.length; i++) {
+    const b = bars[i];
+    const haClose = (b.o + b.h + b.l + b.c) / 4;
+    const haOpen = (prevOpen + prevClose) / 2;
+    const haHigh = Math.max(b.h, haOpen, haClose);
+    const haLow = Math.min(b.l, haOpen, haClose);
+    
+    haBars.push({ t: b.t, o: haOpen, c: haClose, h: haHigh, l: haLow });
+    prevOpen = haOpen;
+    prevClose = haClose;
+  }
+  
+  return haBars;
 }
 
 export async function scan(client, state) {
@@ -49,17 +93,29 @@ export async function scan(client, state) {
   }
 
   // Technical scan
-  state.log("SCAN", `Scanning ${cfg.watchlist.join(", ")}`);
+  state.log("SCAN", `Scanning ${cfg.watchlist.length} watchlist symbols`);
   const candidates = [];
+
+  const batchRes = await t(client, "signals-batch", { symbols: cfg.watchlist, timeframe: "1Day" });
+  if (!batchRes.ok) {
+    state.log("SCAN", "Failed to fetch signals-batch");
+    return;
+  }
+
+  const results = batchRes.data.results || [];
+  const resultsMap = {};
+  for (const r of results) {
+    resultsMap[r.symbol] = r;
+  }
 
   for (const symbol of cfg.watchlist) {
     if (state.traded.has(symbol)) continue;
 
-    const res = await t(client, "signals-get", { symbol, timeframe: "1Day" });
-    if (!res.ok) continue;
+    const res = resultsMap[symbol];
+    if (!res) continue;
 
-    const tech = res.data.technicals;
-    const sigs = res.data.signals;
+    const tech = res.technicals;
+    const sigs = res.signals;
 
     const rsi = tech?.rsi_14;
     const price = tech?.price;
@@ -71,8 +127,31 @@ export async function scan(client, state) {
     const macdBull = macdHist != null && macdHist > 0;
     const hasBullish = sigs?.some(s => s.direction === "bullish");
 
-    if (!rsiOk || !hasBullish) {
-      state.log("SCAN", `${symbol} filtered`, { rsi: rsi?.toFixed(1), bullish: hasBullish });
+    // Heikin-Ashi Filter
+    let haOk = true;
+    let haDetails = null;
+    if (cfg.heikin_ashi_filter?.enabled && price != null) {
+      const barsRes = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: 20 });
+      if (barsRes.ok && barsRes.data.bars?.length >= 5) {
+        const haCandles = computeHeikinAshi(barsRes.data.bars);
+        const latestHA = haCandles[haCandles.length - 1];
+        const isGreen = latestHA.c > latestHA.o;
+        const lowShadowPct = ((latestHA.o - latestHA.l) / latestHA.o) * 100;
+        const maxLowShadow = cfg.heikin_ashi_filter.max_lower_shadow_pct ?? 0.05;
+        const minimalLowerShadow = lowShadowPct <= maxLowShadow;
+        haOk = isGreen && minimalLowerShadow;
+        haDetails = { isGreen, lowShadowPct, minimalLowerShadow };
+      } else {
+        haOk = false;
+      }
+    }
+
+    if (!rsiOk || !hasBullish || !haOk) {
+      state.log("SCAN", `${symbol} filtered`, {
+        rsi: rsi?.toFixed(1),
+        bullish: hasBullish,
+        heikin_ashi: haOk ? "pass" : haDetails ? `fail (green=${haDetails.isGreen}, shadow=${haDetails.lowShadowPct.toFixed(3)}%)` : "fail (no data)"
+      });
       continue;
     }
 
@@ -126,21 +205,11 @@ export async function scan(client, state) {
   if (!sor.ok) return;
   state.log("SOR", `${sor.data.venue} / ${sor.data.algo}`);
 
-  // TWAP schedule
-  const sched = await t(client, "execution-twap", {
-    symbol: pick.symbol, side: "buy", total_qty: 3,
-    duration_minutes: cfg.twap_duration_minutes,
-    interval_minutes: cfg.twap_interval_minutes,
-    start_time_iso: new Date().toISOString(),
-  });
-  if (!sched.ok) return;
-  state.log("TWAP", `${sched.data.slices} slices over ${sched.data.duration_minutes}min`);
-
-  // Execute child[0]
-  const child = sched.data.children[0];
+  // Execute order
   const preview = await t(client, "orders-preview", {
-    symbol: pick.symbol, side: "buy", qty: child.qty,
-    order_type: "market", time_in_force: "day",
+    symbol: pick.symbol, side: "buy", qty: 3,
+    order_type: sor.data.algo, time_in_force: "day",
+    signal_confidence: pick.confidence,
   });
   if (!preview.ok || !preview.data.policy.allowed) {
     const why = (preview.data?.policy?.violations || []).map(v => v.message || v.rule).join("; ");
@@ -151,7 +220,7 @@ export async function scan(client, state) {
   const submit = await t(client, "orders-submit", { approval_token: preview.data.policy.approval_token });
   if (!submit.ok) { state.log("EXEC", `Submit failed: ${submit.error?.message}`); return; }
 
-  state.log("EXEC", `✓ BUY ${child.qty} ${pick.symbol} @ ~$${preview.data.preview.estimated_price}`, {
+  state.log("EXEC", `✓ BUY 3 ${pick.symbol} @ ~$${preview.data.preview.estimated_price}`, {
     order_id: submit.data.order.id,
   });
 
@@ -159,15 +228,15 @@ export async function scan(client, state) {
   const fp = preview.data.preview.estimated_price;
   await t(client, "execution-record-fill", {
     alpaca_order_id: submit.data.order.id,
-    symbol: pick.symbol, side: "buy", qty: child.qty,
+    symbol: pick.symbol, side: "buy", qty: 3,
     fill_price: fp, expected_price: fp,
-    venue: "alpaca", algo_type: "twap",
+    venue: "alpaca", algo_type: sor.data.algo,
     aggregated_signal_id: agg.data.aggregated_signal_id,
   });
 
   state.traded.add(pick.symbol);
   state.positionsOpened++;
-  state.fills.push({ symbol: pick.symbol, qty: child.qty, price: fp, order_id: submit.data.order.id, time: new Date().toISOString() });
+  state.fills.push({ symbol: pick.symbol, qty: 3, price: fp, order_id: submit.data.order.id, time: new Date().toISOString() });
 }
 
 export function onStop(state) {

@@ -851,6 +851,152 @@ describe("PolicyEngine Options Validation", () => {
     expect(res.allowed).toBe(false);
     expect(res.violations[0]!.rule).toBe("options_no_averaging_down");
   });
+
+  it("should classify covered_call when underlying shares are held, and short_call if not", () => {
+    const config = createMockConfig();
+    config.options.options_enabled = true;
+    config.options.allowed_strategies = ["covered_call", "short_call"];
+    const engine = new PolicyEngine(config);
+
+    const intent = createBaseOptionIntent();
+    intent.side = "sell"; // Selling a call
+
+    // Case 1: owns 100 shares of AAPL. Should be covered_call.
+    const mockPositions: Position[] = [
+      {
+        asset_id: "a1",
+        symbol: "AAPL",
+        exchange: "NASDAQ",
+        asset_class: "us_equity",
+        avg_entry_price: 150,
+        qty: 100,
+        side: "long",
+        market_value: 15000,
+        cost_basis: 15000,
+        unrealized_pl: 0,
+        unrealized_plpc: 0,
+        unrealized_intraday_pl: 0,
+        unrealized_intraday_plpc: 0,
+        current_price: 150,
+        lastday_price: 150,
+        change_today: 0,
+      },
+    ];
+
+    let res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 5000, buying_power: 10000 }),
+      positions: mockPositions,
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    expect(res.allowed).toBe(true);
+
+    // Case 2: owns only 50 shares of AAPL (insufficient). Should classify as short_call.
+    mockPositions[0]!.qty = 50;
+    res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 5000, buying_power: 10000 }),
+      positions: mockPositions,
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    // Classifies as short_call. Since short_call is allowed, it evaluates buying power/margin.
+    // Margin needed = (0.20 * 150 + 1.50) * 1 * 100 = (30 + 1.50) * 100 = $3150.
+    // Buying power = 10000 >= 3150. So it should be allowed as short_call.
+    expect(res.allowed).toBe(true);
+
+    // Case 3: short_call not allowed in config.
+    config.options.allowed_strategies = ["covered_call"]; // short_call removed
+    res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 5000, buying_power: 10000 }),
+      positions: mockPositions, // only 50 shares
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.violations[0]!.rule).toBe("options_strategy_not_allowed");
+  });
+
+  it("should classify cash_secured_put when cash covers strike, and short_put if not", () => {
+    const config = createMockConfig();
+    config.options.options_enabled = true;
+    config.options.allowed_strategies = ["cash_secured_put", "short_put"];
+    const engine = new PolicyEngine(config);
+
+    const intent = createBaseOptionIntent();
+    intent.side = "sell";
+    intent.options!.option_type = "put"; // strike = 150, qty = 1 -> collateral = $15,000
+
+    // Case 1: Enough cash ($16,000). Should be cash_secured_put.
+    let res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 16000, buying_power: 32000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    expect(res.allowed).toBe(true);
+
+    // Case 2: Insufficient cash ($10,000). Classifies as short_put.
+    res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 10000, buying_power: 20000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    // short_put is allowed. Margin needed = (0.20 * 150 + 1.50) * 100 = $3150.
+    // Buying power = 20000 >= 3150. So allowed as short_put.
+    expect(res.allowed).toBe(true);
+
+    // Case 3: short_put not allowed.
+    config.options.allowed_strategies = ["cash_secured_put"];
+    res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 10000, buying_power: 20000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.violations[0]!.rule).toBe("options_strategy_not_allowed");
+  });
+
+  it("should enforce buying power / margin limits for short options", () => {
+    const config = createMockConfig();
+    config.options.options_enabled = true;
+    config.options.allowed_strategies = ["short_call", "short_put"];
+    const engine = new PolicyEngine(config);
+
+    const intent = createBaseOptionIntent();
+    intent.side = "sell"; // short call. Strike = 150, qty = 1. Premium = 1.50.
+    // Margin needed = (0.20 * 150 + 1.50) * 100 = $3150.
+
+    // Case 1: Insufficient buying power ($2000 < $3150) -> rejected
+    let res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 1000, buying_power: 2000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.violations[0]!.rule).toBe("options_insufficient_margin");
+
+    // Case 2: short put with insufficient buying power -> rejected
+    intent.options!.option_type = "put";
+    res = engine.evaluate({
+      intent,
+      account: createMockAccount({ cash: 1000, buying_power: 2000 }),
+      positions: [],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.violations[0]!.rule).toBe("options_insufficient_margin");
+  });
 });
 
 describe("PolicyEngine Quantitative risk (Kelly & VaR)", () => {
@@ -1022,6 +1168,60 @@ describe("PolicyEngine Quantitative risk (Kelly & VaR)", () => {
     };
     const resAllowed = engine.evaluate({ ...ctx, intent: intentAllowed });
     expect(resAllowed.violations.some(v => v.rule === "confidence_threshold_violation")).toBe(false);
+  });
+
+  it("should enforce factor concentration clamp when net portfolio Market Beta exceeds 0.85", () => {
+    const config = createMockConfig();
+    config.max_position_pct_equity = 0.10; // 10%
+    const engine = new PolicyEngine(config);
+
+    const intent: TradeIntent = {
+      symbol: "AAPL",
+      side: "buy",
+      qty: 60, // 60 * 150 = $9,000 (9.0% of $100,000 equity)
+      limit_price: 150,
+      order_type: "limit",
+      time_in_force: "day",
+    };
+
+    const ctx: PolicyContext = {
+      intent,
+      account: createMockAccount({ equity: 100000 }),
+      positions: [
+        {
+          asset_id: "spy-id",
+          symbol: "SPY",
+          qty: 150,
+          avg_entry_price: 500,
+          market_value: 75000, // 75% of equity in SPY (Market Beta = 1.0)
+          cost_basis: 75000,
+          unrealized_pl: 0,
+          unrealized_plpc: 0,
+          current_price: 500,
+          side: "long",
+          asset_class: "us_equity",
+          exchange: "ARCA",
+          unrealized_intraday_pl: 0,
+          unrealized_intraday_plpc: 0,
+          lastday_price: 500,
+          change_today: 0,
+        }
+      ],
+      clock: createMockClock(),
+      riskState: createMockRiskState(),
+      factorLoadings: {
+        SPY: { betaMkt: 1.0, betaSmb: 0.0, betaHml: 0.0 },
+        AAPL: { betaMkt: 1.2, betaSmb: 0.1, betaHml: -0.1 },
+      },
+    };
+
+    // Net Beta = (75,000/100,000 * 1.0) + (9,000/100,000 * 1.2) = 0.75 + 0.108 = 0.858 > 0.85
+    // Clamps position limit from 10% to 5% of equity. Since proposed AAPL size is 9%, it should violate max_position_pct!
+    const res = engine.evaluate(ctx);
+    
+    expect(res.allowed).toBe(false);
+    expect(res.violations.some(v => v.rule === "max_position_pct")).toBe(true);
+    expect(res.warnings.some(w => w.rule === "factor_concentration_warning")).toBe(true);
   });
 });
 
