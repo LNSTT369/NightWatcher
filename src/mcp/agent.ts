@@ -19,7 +19,7 @@ import type { KellyResult } from "../risk/kelly";
 import type { VaRResult } from "../risk/var";
 import type { CorrelationResult } from "../risk/correlation";
 import { createTrade } from "../storage/d1/queries/trades";
-import { hmacVerify } from "../lib/utils";
+import { hmacVerify, hmacSign } from "../lib/utils";
 import {
   createJournalEntry,
   logOutcome,
@@ -619,6 +619,8 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.MARKET_CLOSED, message: "Market closed" }), null, 2) }], isError: true };
           }
 
+          const clientOrderId = (await hmacSign(approval_token, this.env.KILL_SWITCH_SECRET)).slice(0, 48);
+
           const order = await alpaca.trading.createOrder({
             symbol: orderParams.symbol,
             qty: orderParams.qty,
@@ -628,7 +630,7 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
             time_in_force: orderParams.time_in_force,
             limit_price: orderParams.limit_price,
             stop_price: orderParams.stop_price,
-            client_order_id: validation.approval_id,
+            client_order_id: clientOrderId,
           });
 
           await consumeApprovalToken(db, validation.approval_id!);
@@ -892,6 +894,101 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
                 conflict_detected: aggregated.conflict_detected,
                 source_count: aggregated.source_count,
                 contributing_sources: aggregated.contributing_signals.map((s) => s.source),
+              }), null, 2),
+            }],
+          };
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INTERNAL_ERROR, message: String(error) }), null, 2) }], isError: true };
+        }
+      }
+    );
+
+    this.server.tool(
+      "portfolio-deploy",
+      "Deploy a full portfolio from a QuantSpace optimization blob (JSON URL). Parses weights into AlphaSignals.",
+      {
+        input_url: z.string().url(),
+        strategy_name: z.string().min(1),
+        rationale: z.string().optional(),
+        urgency: z.enum(["immediate", "session", "swing"]).default("session"),
+        horizon_mins: z.number().positive().default(60),
+      },
+      async (input) => {
+        try {
+          const response = await fetch(input.input_url);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch portfolio blob: ${response.statusText}`);
+          }
+          const blob = await response.json() as any;
+          
+          // QuantSpace standard schema: { weights: { SYMBOL: number }, metrics?: { sharpe: number, drawdown: number } }
+          const weights = blob.weights || blob.portfolio || {};
+          const symbols = Object.keys(weights);
+          
+          if (symbols.length === 0) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.INVALID_INPUT, message: "Portfolio blob contains no weights" }), null, 2) }], isError: true };
+          }
+
+          const signalIds: string[] = [];
+          for (const symbol of symbols) {
+            const weight = weights[symbol];
+            if (typeof weight !== "number") continue;
+
+            const symUpper = symbol.toUpperCase();
+            // Deterministic signal_id based on deployment context
+            const signalId = (await hmacSign(`${input.input_url}:${symUpper}:${input.strategy_name}`, this.env.KILL_SWITCH_SECRET)).slice(0, 32);
+
+            const signal: AlphaSignal = {
+              signal_id: signalId,
+              source: "external",
+              generated_at: new Date().toISOString(),
+              ttl_seconds: DEFAULT_TTL[input.urgency],
+              symbol: symbol.toUpperCase(),
+              asset_class: "equity",
+              direction: weight > 0 ? "long" : weight < 0 ? "short" : "neutral",
+              confidence: 0.85, // QuantSpace deployments are considered high-confidence
+              urgency: input.urgency,
+              horizon: input.horizon_mins,
+              suggested_pct_equity: Math.abs(weight),
+              rationale: input.rationale || `QuantSpace ${input.strategy_name} deployment re-weighting`,
+              regime_tags: [],
+              supporting_data: {
+                quantspace_source: input.input_url,
+                raw_weight: weight,
+                backtest_metrics: blob.metrics || {}
+              }
+            };
+
+            const id = await insertAlphaSignal(db, signal);
+            signalIds.push(id);
+          }
+
+          // Save strategy provenance to active_strategies if metrics are available
+          const metrics = blob.metrics || {};
+          const strategyId = (await hmacSign(input.input_url, this.env.KILL_SWITCH_SECRET)).slice(0, 32);
+          await db.run(
+            `INSERT OR IGNORE INTO active_strategies 
+             (strategy_id, provider_key_id, github_url, name, status, 
+              last_backtest_sharpe, last_backtest_beta, registered_at)
+             VALUES (?, 'qca-dev-partner', ?, ?, 'active', ?, ?, ?)`,
+            [
+              strategyId,
+              input.input_url,
+              input.strategy_name,
+              metrics.sharpe || 0,
+              metrics.drawdown || 0, // Mapping drawdown to beta slot as temporary proxy for risk
+              new Date().toISOString()
+            ]
+          );
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify(success({
+                message: `Successfully ingested ${signalIds.length} signals from QuantSpace blob`,
+                strategy_id: strategyId,
+                signal_ids: signalIds,
+                metrics_recorded: Object.keys(metrics).length > 0
               }), null, 2),
             }],
           };
@@ -1443,10 +1540,12 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         symbol: z.string().min(1),
         timeframe: z.enum(["1Min", "5Min", "15Min", "1Hour", "1Day"]).default("1Day"),
         limit: z.number().min(1).max(1000).default(100),
+        start: z.string().optional(),
+        end: z.string().optional(),
       },
-      async ({ symbol, timeframe, limit }) => {
+      async ({ symbol, timeframe, limit, start, end }) => {
         try {
-          const bars = await alpaca.marketData.getBars(symbol.toUpperCase(), timeframe, { limit });
+          const bars = await alpaca.marketData.getBars(symbol.toUpperCase(), timeframe, { limit, start, end });
           return { content: [{ type: "text" as const, text: JSON.stringify(success({ symbol: symbol.toUpperCase(), timeframe, count: bars.length, bars }), null, 2) }] };
         } catch (error) {
           return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };
@@ -1461,10 +1560,12 @@ export class NightwatcherMcpAgent extends McpAgent<Env> {
         symbols: z.array(z.string()).min(1).max(150),
         timeframe: z.enum(["1Min", "5Min", "15Min", "1Hour", "1Day"]).default("1Day"),
         limit: z.number().min(1).max(1000).default(100),
+        start: z.string().optional(),
+        end: z.string().optional(),
       },
-      async ({ symbols, timeframe, limit }) => {
+      async ({ symbols, timeframe, limit, start, end }) => {
         try {
-          const barsMap = await alpaca.marketData.getMultiBars(symbols.map((s) => s.toUpperCase()), timeframe, { limit });
+          const barsMap = await alpaca.marketData.getMultiBars(symbols.map((s) => s.toUpperCase()), timeframe, { limit, start, end });
           return { content: [{ type: "text" as const, text: JSON.stringify(success({ count: Object.keys(barsMap).length, bars: barsMap }), null, 2) }] };
         } catch (error) {
           return { content: [{ type: "text" as const, text: JSON.stringify(failure({ code: ErrorCode.PROVIDER_ERROR, message: String(error) }), null, 2) }], isError: true };

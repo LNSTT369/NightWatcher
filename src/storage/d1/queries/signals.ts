@@ -12,7 +12,7 @@ export async function insertAlphaSignal(
   ).toISOString();
 
   await db.run(
-    `INSERT INTO alpha_signals
+    `INSERT OR IGNORE INTO alpha_signals
        (id, source, symbol, asset_class, direction, confidence, urgency,
         horizon_mins, suggested_notional, suggested_pct_equity, rationale,
         regime_tags, supporting_data, status, generated_at, ttl_seconds,
@@ -146,7 +146,7 @@ export async function insertAggregatedSignal(
   const contributingIds = agg.contributing_signals.map((s) => s.signal_id);
 
   await db.run(
-    `INSERT INTO aggregated_signals
+    `INSERT OR IGNORE INTO aggregated_signals
        (id, symbol, final_direction, final_confidence, source_count,
         conflict_detected, contributing_signal_ids)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,

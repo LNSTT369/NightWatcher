@@ -298,6 +298,9 @@ async function runAutonomousFuturesHedging(env: Env): Promise<void> {
       const shortQty = Math.round(portfolioDollarBeta / hedgePrice);
       
       if (shortQty > 0) {
+        // Deterministic ID ensures we don't double-hedge within the same hour if cron retries
+        const clientOrderId = `hedge_open_${FALLBACK_HEDGE_SYMBOL}_${new Date().toISOString().slice(0, 13)}`.replace(/[:-]/g, "");
+        
         console.log(`Submitting fully autonomous short hedge for ${shortQty} shares of SPY (notional ~$${(shortQty * hedgePrice).toFixed(2)})`);
         await alpaca.trading.createOrder({
           symbol: FALLBACK_HEDGE_SYMBOL,
@@ -305,6 +308,7 @@ async function runAutonomousFuturesHedging(env: Env): Promise<void> {
           type: "market",
           time_in_force: "day",
           qty: shortQty,
+          client_order_id: clientOrderId,
         });
       }
     } else if (portfolioBeta <= 0.50 && activeHedge) {
@@ -312,12 +316,15 @@ async function runAutonomousFuturesHedging(env: Env): Promise<void> {
       
       // Buy back the short hedge
       if (activeHedge.side === "short") {
+        const clientOrderId = `hedge_close_${activeHedge.symbol}_${new Date().toISOString().slice(0, 13)}`.replace(/[:-]/g, "");
+        
         await alpaca.trading.createOrder({
           symbol: activeHedge.symbol,
           side: "buy",
           type: "market",
           time_in_force: "day",
           qty: Math.abs(activeHedge.qty),
+          client_order_id: clientOrderId,
         });
         console.log(`Successfully closed active hedge position in ${activeHedge.symbol}.`);
       }

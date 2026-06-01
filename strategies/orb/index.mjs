@@ -211,7 +211,17 @@ async function captureRanges(client, state) {
     let adr_pct = null;
     let atr = null;
     if (cfg.filters.adr.enabled) {
-      const dailyRes = await t(client, "prices-bars", { symbol, timeframe: "1Day", limit: 22 });
+      // Use a start date pushed 60+ days back to ensure buffer for ADR calc
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - 65);
+      const start = d.toISOString().split("T")[0];
+
+      const dailyRes = await t(client, "prices-bars", { 
+        symbol, 
+        timeframe: "1Day", 
+        start,
+        limit: 45 
+      });
       if (dailyRes.ok && dailyRes.data.bars?.length) {
         const metrics = computeDailyMetrics(dailyRes.data.bars);
         adr_pct = metrics.adr_pct;
@@ -224,8 +234,17 @@ async function captureRanges(client, state) {
     let rvol = null;
     const needHourly = cfg.filters.narrow_range.enabled || cfg.filters?.rvol?.enabled === true;
     if (needHourly) {
-      const hourlyLimit = Math.max(cfg.filters.narrow_range.lookback_days, 20) * 8;
-      const hourlyRes = await t(client, "prices-bars", { symbol, timeframe: "1Hour", limit: hourlyLimit });
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - 65);
+      const start = d.toISOString().split("T")[0];
+      
+      const hourlyLimit = Math.max(cfg.filters.narrow_range.lookback_days, 20) * 8 + 50;
+      const hourlyRes = await t(client, "prices-bars", { 
+        symbol, 
+        timeframe: "1Hour", 
+        start,
+        limit: hourlyLimit 
+      });
       if (hourlyRes.ok && hourlyRes.data.bars?.length) {
         const metrics = computeHourlyMetrics(hourlyRes.data.bars);
         historicalRanges = metrics.historicalRanges;
