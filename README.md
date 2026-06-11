@@ -1,171 +1,127 @@
-<div align="center">
-  
-  <br>
-  
-  # NIGHTWATCHER V3
-  
-  **Autonomous trading infrastructure for discretionary traders.**<br>
-  Multi-agent research · Policy-gated execution · Institutional-grade quality.
+# ░▒▓ NIGHTWATCHER V3 // AUTONOMOUS QUANT TERMINAL
 
-  <br>
-  
-  `TypeScript` &nbsp;·&nbsp; `Cloudflare Workers` &nbsp;·&nbsp; `MCP Server` &nbsp;·&nbsp; `Alpaca Brokerage` &nbsp;·&nbsp; `Durable Objects`
+**Universal, self-hosted quantitative execution rail & multi-agent trading system.**  
+*Local-first · Policy-gated · Non-custodial · Monospace-driven.*
 
-  <br>
-  
-</div>
+```
+ ╔═══════════════════════════════════════════════════════════════════╗
+ ║  [SYSTEM // ACTIVE]                                               ║
+ ║  → 7 Quant Strategies   → Pre-Trade Policy Gate (14 Constraints)  ║
+ ║  → D1 Local Ledger      → Interactive Tenancy Onboarding Wizard   ║
+ ╔═══════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
-## What It Does
+## ✦ [01 // INTRODUCTION]
 
-NIGHTWATCHER V3 is a self-hosted trading infrastructure that runs specialized LLM-powered agents to research equities, debate investment theses, enforce risk policy, and execute trades — all autonomously.
+**NIGHTWATCHER V3** is a private family office trading infrastructure that runs specialized LLM-powered agents and deterministic algorithmic runners. It is built to analyze equities, debate market risk, and route execution orders directly to **Alpaca** while maintaining absolute data sovereignty.
 
-It mirrors how real trading firms operate: analysts gather data, researchers argue bull/bear cases, risk managers apply rules, and a trader executes through Alpaca. Every trade passes through a rule-based **policy engine** with 14 pre-trade checks and a two-step approval flow (preview → submit) before it ever hits the market.
-
-**One command starts everything.** Seven strategies run on schedule. Results are stored locally in a D1 database.
+Designed with a high-contrast, brutalist monochrome aesthetic, it provides a complete trading terminal experience for quants and discretionary traders alike, allowing zero-friction strategy deployments from any language, public repository, or webhook signal.
 
 ---
 
-## Quick Start
+## ✦ [02 // ZERO-FRICTION SETUP]
+
+You do not need to manually provision databases, configure local variables, or write config files. The entire system is built to install and run automatically.
+
+### 🚀 Launch Command
 
 ```bash
-# 1. Clone, install
-git clone https://github.com/YOUR-REPO/NIGHTWATCHER.git
-cd NIGHTWATCHER
-npm install
+# 1. Clone the repository
+git clone https://github.com/LNSTT369/NightWatcher.git
+cd NightWatcher
 
-# 2. Configure (at minimum)
-cp .env.example .dev.vars
-# Edit .dev.vars — add your Alpaca API keys
-
-# 3. Provision & run
-wrangler d1 create nightwatcher-db        # Create D1 database
-wrangler kv:namespace create CACHE         # Create KV namespace
-# Paste the returned IDs into wrangler.toml
-npm run db:migrate                        # Apply database schema
-./start.sh                                # Start everything
+# 2. Run the universal starter script
+./start.sh
 ```
 
-That's it. The MCP server starts on port **8787**, the dashboard API on **3001**.
+### 📦 What Happens Automatically:
+1. **Dependency Installation:** The script checks for and installs all root backend and dashboard frontend dependencies.
+2. **Database Provisioning:** Seeds the local D1 SQLite database and applies migrations `0001` through `0012` non-interactively.
+3. **Services Startup:** Boots the MCP server, Dashboard API, Vite/React Dashboard UI, and all strategy runners concurrently.
 
-### What You Get
-
-| Feature | Detail |
-|---|---|
-| **7 Live Strategies** | ORB, momentum-breakout, gap-and-go, mean-reversion, options-momentum, VWAP-reversion, VP-MACD |
-| **Multi-Agent Research** | Analysts gather data → bull/bear researchers debate → risk team reviews → trader executes |
-| **Policy Engine** | 14 pre-trade checks: kill switch, loss cooldown, daily loss limits, market hours, symbol lists, notional caps, position sizing, short restrictions, buying power |
-| **Two-Step Execution** | `orders-preview` validates against policy and returns an HMAC approval token → `orders-submit` verifies the token then sends to Alpaca |
-| **Three Signal Interfaces** | REST (`POST /api/signal`), WebSocket (`/stream`), MCP (`signal-submit` tool) — any strategy, any language |
-| **Local-First** | All data stays local. D1 for persistence, KV for hot cache, R2 for artifacts. No cloud processing of your trades |
-| **Paper Trading** | Set `ALPACA_PAPER=true` in `.dev.vars` to run risk-free before going live |
+### ⚙️ Tenancy Onboarding:
+* Once `./start.sh` finishes, open **`http://localhost:3000`** in your browser.
+* The interactive **Setup Wizard** will launch. Review the risk disclaimers and input your Alpaca API credentials.
+* Your credentials are encrypted on-device via AES-GCM (using `KILL_SWITCH_SECRET`) and saved locally. Your keys never leave your machine.
 
 ---
 
-## Architecture
+## ✦ [03 // HOW IT WORKS]
+
+Every trade order routes through a two-step execution flow to protect capital and prevent system runaways:
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Signal Sources                      │
-│  REST · WebSocket · MCP (LLM agents)             │
-└──────────────────────┬──────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────┐
-│           Policy Engine (14 checks)               │
-│  Kill switch → Cooldown → Limits → Approval      │
-└──────────────────────┬──────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────┐
-│           Execution Layer                        │
-│  Alpaca API · Two-step flow · Full audit trail    │
-└─────────────────────────────────────────────────┘
-
-Storage:  D1 (trades, signals, policy) · KV (cache) · R2 (artifacts)
-Runtime: Cloudflare Workers + Durable Objects + KV + Scheduled Cron
+    [Signal Source] (REST / WebSocket / MCP Agent)
+           │
+           ▼
+┌──────────────────────────────────────┐
+│  orders-preview (14 Policy Checks)   │
+│  - Cooldown checks                   │
+│  - Kelly criterion position sizing   │
+│  - Daily loss limit clamping         │
+└──────────────────┬───────────────────┘
+                   │  (Generates HMAC-signed approval token, 5-min TTL)
+                   ▼
+┌──────────────────────────────────────┐
+│  orders-submit (Verifies signature)  │
+│  - Re-evaluates platform kill-switch │
+│  - Submits trade directly to Alpaca  │
+└──────────────────────────────────────┘
 ```
-
-### The Two-Step Flow
-
-Every trade follows a mandatory two-step path enforced in code. No approval token, no execution.
-
-1. **`orders-preview`** — validates against PolicyEngine (14 checks), generates HMAC-signed approval token (5-min TTL)
-2. **`orders-submit`** — verifies token hasn't expired or been used, re-checks kill switch, then calls Alpaca
 
 ---
 
-## The Strategies
+## ✦ [04 // STRATEGY ENGINE]
 
-| Strategy | Type | Window | Exit |
-|---|---|---|---|
-| **Opening Range Breakout (ORB)** | Long-only momentum | First 15–60 min of RTH | Stop at opposite range side / profit target |
-| **Momentum Breakout** | Intraday momentum | Early session breakout | ADR% + volume confirmation |
-| **Gap and Go** | Overnight gap capture | Pre-market gap → morning reaction | Close-of-session force exit |
-| **Mean Reversion** | Range-bound markets | Extended move from VWAP | Return to mean / stop loss |
-| **Options Momentum** | Long call/put options | Same as momentum, options legs | Delta-based or time-based exit |
-| **VWAP Reversion** | Price vs volume-weighted average | Overbought/oversold from VWAP | Mean reversion target |
-| **VP-MACD** | Volume-profiled MACD divergence | Intraday momentum shifts | MACD crossover + volume filter |
+NIGHTWATCHER runs 7 strategies out-of-the-box, each running isolated sandboxed run loops:
+
+| Strategy | Algorithmic Mechanism | Session Window | Risk Exit Rule |
+| :--- | :--- | :--- | :--- |
+| **ORB** | Opening Range Breakout | First 15–60 min of RTH | Opposite range side / fixed profit target |
+| **Momentum Breakout** | Volume-confirmed breakouts | Intraday (Morning session) | ADR% deviation trailing stop |
+| **Gap and Go** | Pre-market overnight gap capture | Market Open (First 30 min) | Forced close-of-session market exit |
+| **Mean Reversion** | Extended deviation from VWAP | Continuous | Return to VWAP mean / tight stop loss |
+| **Options Momentum** | Leveraged call/put legs | Continuous | Delta-based trailing stop |
+| **VWAP Reversion** | Volume-weighted average reversion | Continuous | Overbought/oversold Bollinger exit |
+| **VP-MACD** | Volume-profile MACD divergence | Continuous | MACD histogram shift + volume check |
 
 ---
 
-## Project Structure
+## ✦ [05 // TECHNICAL MATRIX]
+
+* **Runtime:** Cloudflare Workers, Durable Objects, Node.js.
+* **Storage:** local D1 SQLite (persistent ledger) & KV Namespace (hot cache).
+* **Interface Protocols:**
+  * **REST API:** `POST /api/signal`
+  * **WebSocket Stream:** `/stream`
+  * **Model Context Protocol (MCP):** Connects to any desktop AI client (Claude, Cursor) as a native toolset.
+* **Security & TENANCY:** Two-step HMAC-signed token approval with full database audit logging.
+
+---
+
+## ✦ [06 // DIRECTORY STRUCTURE]
 
 ```
 NIGHTWATCHER/
-├── src/                          # All source code (MCP server, dashboard API, strategies)
-│    ├── mcp/                     # NightwatcherMcpAgent (~50 MCP tools)
-│    ├── policy/                  # PolicyEngine + config
-│    ├── signals/                 # Signal types + aggregator
-│    ├── stream/                  # WebSocket handler
-│    └── ...                      # Full source listing → see src/
-├── strategies/                   # Strategy implementations (7 modules)
-├── dashboard/                    # React-based monitoring frontend
-├── migrations/                   # D1 database schema (12 migrations)
-├── scripts/                      # Helper scripts (scan-now, run, etc.)
-└── start.sh                      # One-command entry point
+├── src/                          # Backend source files (Workers & endpoints)
+│    ├── api/                     # Setup API and signal endpoints
+│    ├── mcp/                     # Model Context Protocol tool definitions
+│    ├── policy/                  # Pre-trade Policy Engine checks
+│    └── durable-objects/         # Stateful session control
+├── dashboard/                    # React frontend dashboard UI
+├── migrations/                   # Local database schema definitions
+├── strategies/                   # Algorithmic strategy runners
+├── scripts/                      # Production API & execution scripts
+└── _archive/                     # Ignored local backup directory
 ```
 
 ---
 
-## Configuration
+## ✦ [07 // DISCLAIMER]
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `ALPACA_PAPER` | `true` | Paper trading mode — **always use this first** |
-| `KILL_SWITCH_SECRET` | `nightwatcher_kill_switch_secret_123` | HMAC secret for kill switch |
-| `DEFAULT_MAX_NOTIONAL_PER_TRADE` | `$2,000` | Hard cap per order |
-| `DEFAULT_MAX_POSITION_PCT` | `10%` | Max position as % of equity |
-| `DEFAULT_COOLDOWN_MINUTES` | `30` | Pause after a loss |
-
-See `.env.example` for the full variable list. All defaults are conservative — paper-trading safe.
+This software is for **educational and informational purposes only.** Nothing in this repository constitutes financial, investment, advisory, legal, or tax advice. All trading decisions are made at your own risk. Markets are highly volatile, and you can lose some or all of your capital. The authors are not responsible for any financial losses resulting from the use of this software. Always start with Paper Trading enabled and never trade with capital you cannot afford to lose.
 
 ---
-
-## Development
-
-```bash
-npm run dev               # Local dev server (port 8787)
-npm run build             # TypeScript compile
-npm run typecheck         # Type-check only
-npm run test              # Vitest (watch mode)
-npm run db:migrate        # Apply D1 migrations locally
-npm run deploy            # Deploy to Cloudflare dev env
-```
-
----
-
-## Who This Is For
-
-- **Discretionary traders** who want systematic, rules-gated execution without building their own infrastructure
-- **Quant researchers** prototyping strategies that need paper-trading validation before going live
-- **Developers** exploring multi-agent systems and LLM-powered decision making in a real-world context
-
----
-
-## Disclaimer
-
-This software is for **educational and informational purposes only.** Nothing in this repository constitutes financial, investment, legal, or tax advice. All trading decisions are made at your own risk. Markets are volatile — you can lose some or all of your capital. The authors are not responsible for any financial losses resulting from use of this software. Always start with `ALPACA_PAPER=true` and never risk money you cannot afford to lose.
-
----
-
-<sup>MIT License</sup>
+<sup>Licensed under the MIT License. Built with a commitment to privacy, performance, and self-sovereign code.</sup>
