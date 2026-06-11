@@ -11,6 +11,10 @@
  ╔═══════════════════════════════════════════════════════════════════╝
 ```
 
+<p align="center">
+  <img src="assets/dashboard_brutalist.png" alt="NightWatcher V3 Dashboard" width="700" style="border: 2px solid #000000;">
+</p>
+
 ---
 
 ## ✦ [01 // INTRODUCTION]
@@ -45,6 +49,10 @@ cd NightWatcher
 * Once `./start.sh` finishes, open **`http://localhost:3000`** in your browser.
 * The interactive **Setup Wizard** will launch. Review the risk disclaimers and input your Alpaca API credentials.
 * Your credentials are encrypted on-device via AES-GCM (using `KILL_SWITCH_SECRET`) and saved locally. Your keys never leave your machine.
+
+<p align="center">
+  <img src="assets/setup_wizard_brutalist.png" alt="NightWatcher V3 Setup Wizard" width="400" style="border: 2px solid #000000;">
+</p>
 
 ---
 
