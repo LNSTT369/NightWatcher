@@ -5,6 +5,7 @@ import { handleStreamConnection } from "./stream/handler";
 import { handleSignalPost, handleSignalGet } from "./api/signal";
 import { handlePortalGet } from "./api/portal";
 import { handleStrategyDeploy } from "./api/deploy";
+import { handleSetupStatus, handleSetupKeys, handleStatus } from "./api/setup";
 
 export { SessionDO } from "./durable-objects/session";
 export { NightwatcherMcpAgent };
@@ -14,7 +15,7 @@ export default {
     request: Request,
     env: Env,
     ctx: ExecutionContext
-  ): Promise<Response> {
+    ): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
@@ -23,12 +24,12 @@ export default {
           status: "ok",
           timestamp: new Date().toISOString(),
           environment: env.ENVIRONMENT,
-        }),
-        {
+          }),
+         {
           headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
+          }
+        );
+       }
 
     if (url.pathname === "/") {
       return new Response(
@@ -42,61 +43,77 @@ export default {
             portal: "/portal",
             signal: "/api/signal",
             deploy: "/api/signal/deploy",
-          },
-        }),
-        {
+            setupStatus: "/api/setup/status",
+            setupKeys: "/api/setup/keys",
+             },
+          }),
+         {
           headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
+          }
+        );
+       }
 
     if (url.pathname.startsWith("/mcp")) {
       return NightwatcherMcpAgent.mount("/mcp", { binding: "MCP_AGENT" }).fetch(request, env, ctx);
-    }
+       }
 
     if (url.pathname === "/stream") {
       return await handleStreamConnection(request, env);
-    }
+       }
 
     if (url.pathname === "/portal" || url.pathname === "/api/signal/portal") {
       return handlePortalGet(request, env);
-    }
+       }
+
+        // Setup / Onboarding endpoints — wire these FIRST so they don't collide with /api/signal prefix
+    if (url.pathname === "/api/setup/keys" && request.method === "POST") {
+      return handleSetupKeys(request, env);
+       }
+
+    if (url.pathname === "/api/setup/status" && request.method === "GET") {
+      return handleSetupStatus(request, env);
+       }
+
+         // GET /api/status — account status with D1-stored Alpaca keys
+    if (url.pathname === "/api/status" && request.method === "GET") {
+      return handleStatus(request, env);
+       }
 
     if (url.pathname === "/api/signal/deploy") {
       return handleStrategyDeploy(request, env);
-    }
+       }
 
     if (url.pathname === "/api/signal" && request.method === "POST") {
       return handleSignalPost(request, env);
-    }
+       }
 
     const signalMatch = url.pathname.match(/^\/api\/signal\/([a-f0-9]+)$/);
     if (signalMatch && request.method === "GET") {
       return handleSignalGet(request, env, signalMatch[1]!);
-    }
+       }
 
     if (url.pathname.startsWith("/api/signal") && request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
         headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Authorization, Content-Type",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
-    }
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type",
+            "Access-Control-Max-Age": "86400",
+           },
+        });
+       }
 
     return new Response("Not found", { status: 404 });
-  },
+    },
 
   async scheduled(
     event: ScheduledEvent,
     env: Env,
     ctx: ExecutionContext
-  ): Promise<void> {
+    ): Promise<void> {
     const cronId = event.cron;
     console.log(`Cron triggered: ${cronId} at ${new Date().toISOString()}`);
     ctx.waitUntil(handleCronEvent(cronId, env));
-  },
+    },
 };

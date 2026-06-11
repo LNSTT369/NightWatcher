@@ -87,3 +87,18 @@ All MCP tool handlers return `{ content: [{ type: "text", text: JSON.stringify(r
 ### Kill Switch
 
 `kill-switch-enable` cancels all open orders immediately and blocks all future orders. `kill-switch-disable` requires the string `"CONFIRM_RESUME_TRADING"` plus a valid HMAC of `"DISABLE_KILL_SWITCH"` signed with `KILL_SWITCH_SECRET`.
+
+---
+
+## ⚠️ Safety Notice — June 10, 2026 Failure Pattern
+
+This repository was nearly destroyed on June 10, 2026 by a destructive bulk copy operation (`rsync --delete`) that ran without diff-first. The user lost ~6 hours of ship-worthy work and had to rewind using git reflog.
+
+**If working in this directory:**
+- NEVER run `rsync`, `cp -r`, or any bulk file operation without first showing the diff output to the user
+- ALWAYS run `diff -rq` between source and target directories before copying anything
+- If asked to "copy X to Y": show the diff, only copy what actually differs, preserve local-only content (node_modules, .env, secrets, logs, dashboard/)
+- The file structure is: src/ (source code), scripts/, strategies/, dashboard/ (local React UI), archive/ (archived non-product files)
+- Local-only directories that must be preserved: `dashboard/`, `archive/`, `docs/`, `.dev.vars`, `node_modules/`
+
+See `/Users/user/Desktop/.claude/projects/-Users-user-Desktop/memory/dark-pattern-dangerous-bash-operations.md` for the full failure audit.

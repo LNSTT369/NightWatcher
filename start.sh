@@ -55,21 +55,47 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ── 0. Run Database Migrations ──────────────────────────────────────────────
+# ── 0. Dependency Check & Installation ───────────────────────────────────────
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║            NIGHTWATCHER V3 — STARTING                   ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
-echo "[1/5] Applying local database migrations..."
-npm run db:migrate
+
+# Check and install backend dependencies if missing
+if [ ! -d "node_modules" ]; then
+  echo "[1/6] Installing backend dependencies (npm install)..."
+  npm install
+  echo "      ✓ Backend dependencies installed."
+  echo ""
+else
+  echo "[1/6] Backend dependencies verified."
+  echo ""
+fi
+
+# Check and install dashboard dependencies if missing
+if [ ! -d "dashboard/node_modules" ]; then
+  echo "[2/6] Installing dashboard dependencies (npm install)..."
+  npm --prefix dashboard install
+  echo "      ✓ Dashboard dependencies installed."
+  echo ""
+else
+  echo "[2/6] Dashboard dependencies verified."
+  echo ""
+fi
+
+# ── 1. Run Database Migrations ──────────────────────────────────────────────
+
+echo "[3/6] Applying local database migrations..."
+# Pipe 'y' to bypass wrangler prompt in case it runs in interactive mode
+echo "y" | npm run db:migrate
 echo "      ✓ Migrations applied successfully."
 echo ""
 
 # ── Start MCP server ──────────────────────────────────────────────────────────
 
-echo "[2/5] Starting MCP server (wrangler dev)..."
+echo "[4/6] Starting MCP server (wrangler dev)..."
 echo "      Log: $MCP_LOG"
 
 npm run dev > "$MCP_LOG" 2>&1 &
@@ -95,7 +121,7 @@ echo ""
 # ── Start Dashboard API bridge ────────────────────────────────────────────────
 
 DASH_LOG="$LOG_DIR/dashboard-api-$TIMESTAMP.log"
-echo "[3/5] Starting dashboard API (port 3001)..."
+echo "[5/6] Starting dashboard API (port 3001)..."
 echo "      Log: $DASH_LOG"
 node scripts/dashboard-api.mjs > "$DASH_LOG" 2>&1 &
 DASH_PID=$!
@@ -107,7 +133,7 @@ echo ""
 # ── Start Frontend Dashboard UI ───────────────────────────────────────────────
 
 DASH_UI_LOG="$LOG_DIR/dashboard-ui-$TIMESTAMP.log"
-echo "[4/5] Starting Frontend Dashboard UI (port 3000)..."
+echo "[6/6] Starting Frontend Dashboard UI (port 3000)..."
 echo "      Log: $DASH_UI_LOG"
 npm --prefix dashboard run dev > "$DASH_UI_LOG" 2>&1 &
 DASH_UI_PID=$!
@@ -118,7 +144,7 @@ echo ""
 
 # ── Start strategy runners ────────────────────────────────────────────────────
 
-echo "[5/5] Starting strategy runners..."
+echo "      Starting strategy runners..."
 for strategy in "${STRATEGIES[@]}"; do
   STRAT_LOG="$LOG_DIR/$strategy-$TIMESTAMP.log"
   echo "      → $strategy  (log: $STRAT_LOG)"

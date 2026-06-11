@@ -99,3 +99,14 @@ _workspace/
 *.bak
 *.tmp
 *.temp
+
+# Local Archive (untracked development junk)
+_archive/
+
+# Agent/IDE configs & local variables
+.agents/
+.claude/
+.gemini/
+.de.vars
+nightwatcher-strategy-forge/
+nightwatcher-validator/
