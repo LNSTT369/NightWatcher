@@ -1,5 +1,5 @@
 #!/bin/bash
-# NIGHTWATCHER V3 — Start everything
+# NIGHTWATCHER — Start everything
 #
 # Usage:
 #   ./start.sh                        # run all 7 strategies in this terminal
@@ -59,7 +59,7 @@ trap cleanup EXIT INT TERM
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║            NIGHTWATCHER V3 — STARTING                   ║"
+echo "║                NIGHTWATCHER — STARTING                 ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
