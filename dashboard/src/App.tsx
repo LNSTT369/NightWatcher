@@ -520,7 +520,7 @@ export default function App() {
                   className="nw-brand leading-none font-bold text-black"
                   style={{ fontSize: 'clamp(2.2rem, 4vw, 3.4rem)', letterSpacing: '0.04em' }}
                 >
-                  NIGHTWATCHER.OS
+                  NIGHTWATCHER
                 </h1>
                 <span className="hud-label text-white bg-black border-2 border-black px-1.5 py-0.5 shrink-0">V3</span>
               </div>

@@ -68,11 +68,9 @@ async function callTool(name, args = {}) {
     const res = await c.callTool({ name, arguments: args });
     return JSON.parse(res.content[0].text);
   } catch (err) {
-    // Reset so next call retries the connection
-    if (err.message?.includes("connect") || err.message?.includes("ECONNREFUSED")) {
-      mcpReady = false;
-      mcpClient = null;
-    }
+    // Reset connection on any communication failure so next call retries
+    mcpReady = false;
+    mcpClient = null;
     return { ok: false, error: { message: err.message } };
   }
 }

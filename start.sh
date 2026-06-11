@@ -107,7 +107,7 @@ echo ""
 # ── Start Frontend Dashboard UI ───────────────────────────────────────────────
 
 DASH_UI_LOG="$LOG_DIR/dashboard-ui-$TIMESTAMP.log"
-echo "[4/5] Starting Frontend Dashboard UI (port 5173)..."
+echo "[4/5] Starting Frontend Dashboard UI (port 3000)..."
 echo "      Log: $DASH_UI_LOG"
 npm --prefix dashboard run dev > "$DASH_UI_LOG" 2>&1 &
 DASH_UI_PID=$!
@@ -135,7 +135,7 @@ echo "=============================================================="
 echo ""
 echo "  MCP server:     http://localhost:8787"
 echo "  Dashboard API:  http://localhost:3001"
-echo "  Dashboard UI:   http://localhost:5173"
+echo "  Dashboard UI:   http://localhost:3000"
 for strategy in "${STRATEGIES[@]}"; do
   echo "  Strategy:       $strategy"
 done
