@@ -1,7 +1,6 @@
-# ░▒▓ NIGHTWATCHER V3 // AUTONOMOUS QUANT TERMINAL
+# ░▒▓ NIGHTWATCHER V3 // THE PURITY OF QUANTITATIVE EXECUTION
 
-**Universal, self-hosted quantitative execution rail & multi-agent trading system.**  
-*Local-first · Policy-gated · Non-custodial · Monospace-driven.*
+*A self-hosted, policy-gated quantitative rail. Built with absolute intent. Designed for total data sovereignty.*
 
 ```
  ╔═══════════════════════════════════════════════════════════════════╗
@@ -17,38 +16,37 @@
 
 ---
 
-## ✦ [01 // INTRODUCTION]
+## ✦ 01 // THE ESSENCE OF NIGHTWATCHER
 
-**NIGHTWATCHER V3** is a private family office trading infrastructure that runs specialized LLM-powered agents and deterministic algorithmic runners. It is built to analyze equities, debate market risk, and route execution orders directly to **Alpaca** while maintaining absolute data sovereignty.
+At its core, NightWatcher V3 is a study in reduction. We wanted to design a quantitative trading infrastructure that strips away the arbitrary complexity of traditional family office setups. What remains is a singular, unified platform that runs specialized LLM-powered agents and deterministic algorithmic runners with absolute precision. 
 
-Designed with a high-contrast, brutalist monochrome aesthetic, it provides a complete trading terminal experience for quants and discretionary traders alike, allowing zero-friction strategy deployments from any language, public repository, or webhook signal.
+It is designed to sit quietly at the edge of your local architecture. It does not compromise. It debates risk, analyzes equities, and routes execution orders to Alpaca—all while preserving your data sovereignty. Every detail, from the high-contrast brutalist layout to the monospace-driven typography, has been engineered to feel deliberate and profoundly functional.
 
 ---
 
-## ✦ [02 // ZERO-FRICTION SETUP]
+## ✦ 02 // EFFORTLESS PROVISIONING
 
-You do not need to manually provision databases, configure local variables, or write config files. The entire system is built to install and run automatically.
+We’ve always believed that the transition from initial setup to active execution should be entirely seamless. We wanted to eliminate the friction of provisioning databases, configuring host systems, or manually writing environment files. 
 
-### 🚀 Launch Command
+By executing a single command, you initiate a fully automated deployment sequence:
 
 ```bash
-# 1. Clone the repository
+# Clone the repository to your local architecture
 git clone https://github.com/LNSTT369/NightWatcher.git
 cd NightWatcher
 
-# 2. Run the universal starter script
+# Invoke the universal starter script
 ./start.sh
 ```
 
-### 📦 What Happens Automatically:
-1. **Dependency Installation:** The script checks for and installs all root backend and dashboard frontend dependencies.
-2. **Database Provisioning:** Seeds the local D1 SQLite database and applies migrations `0001` through `0012` non-interactively.
-3. **Services Startup:** Boots the MCP server, Dashboard API, Vite/React Dashboard UI, and all strategy runners concurrently.
+### The Automatic Orchestration
+When you run this script, three distinct phases occur in perfect coordination:
+1. **Dependency Resolution:** The environment automatically resolves and installs all required packages for both the backend engine and the visual dashboard.
+2. **Database Purity:** The local D1 SQLite database is instantly provisioned and seeded, applying migrations `0001` through `0012` without requiring user intervention.
+3. **Concurrent Execution:** The Model Context Protocol (MCP) server, the API gateway, the React-based visual dashboard, and all strategy runners begin running simultaneously in a single, coordinated loop.
 
-### ⚙️ Tenancy Onboarding:
-* Once `./start.sh` finishes, open **`http://localhost:3000`** in your browser.
-* The interactive **Setup Wizard** will launch. Review the risk disclaimers and input your Alpaca API credentials.
-* Your credentials are encrypted on-device via AES-GCM (using `KILL_SWITCH_SECRET`) and saved locally. Your keys never leave your machine.
+### Onboarding & Local Isolation
+Once the startup sequence completes, point your browser to `http://localhost:3000`. You will be welcomed by a clean, local Setup Wizard. Here, you define your Alpaca API credentials. They are immediately encrypted using AES-GCM (powered by your local `KILL_SWITCH_SECRET`) and committed directly to your local database. Your keys and trade data remain entirely yours, residing solely on your device.
 
 <p align="center">
   <img src="assets/setup_wizard_brutalist.png" alt="NightWatcher V3 Setup Wizard" width="400" style="border: 2px solid #000000;">
@@ -56,17 +54,17 @@ cd NightWatcher
 
 ---
 
-## ✦ [03 // HOW IT WORKS]
+## ✦ 03 // THE INTEGRITY OF EXECUTION
 
-Every trade order routes through a two-step execution flow to protect capital and prevent system runaways:
+Every signal routed through NightWatcher is subjected to a rigorous, dual-stage verification process. We designed this constraint system to serve as an uncompromising shield against market anomaly and technical failure.
 
 ```
-    [Signal Source] (REST / WebSocket / MCP Agent)
-           │
-           ▼
+     [Signal Source] (REST / WebSocket / MCP Agent)
+            │
+            ▼
 ┌──────────────────────────────────────┐
 │  orders-preview (14 Policy Checks)   │
-│  - Cooldown checks                   │
+│  - Cooldown validation               │
 │  - Kelly criterion position sizing   │
 │  - Daily loss limit clamping         │
 └──────────────────┬───────────────────┘
@@ -79,11 +77,14 @@ Every trade order routes through a two-step execution flow to protect capital an
 └──────────────────────────────────────┘
 ```
 
+1. **The Policy Gate (`orders-preview`):** A rigid filter of 14 specific rules evaluates every order request. It enforces cooling-down windows, dynamic Kelly criterion sizing, and absolute daily loss limits. When passed, it signs the order with a cryptographic HMAC token having a strict 5-minute lifespan.
+2. **The Execution Gate (`orders-submit`):** The submission endpoint verifies this cryptographic signature, double-checks the global system kill-switch status, and sends the order to Alpaca. This structure ensures no rogue agent or script can issue unauthorized trades.
+
 ---
 
-## ✦ [04 // STRATEGY ENGINE]
+## ✦ 04 // THE STRATEGY MATRIX
 
-NIGHTWATCHER runs 7 strategies out-of-the-box, each running isolated sandboxed run loops:
+NightWatcher orchestrates seven isolated strategy loops, each configured to run in absolute isolation and target specific market behaviors:
 
 | Strategy | Algorithmic Mechanism | Session Window | Risk Exit Rule |
 | :--- | :--- | :--- | :--- |
@@ -97,39 +98,43 @@ NIGHTWATCHER runs 7 strategies out-of-the-box, each running isolated sandboxed r
 
 ---
 
-## ✦ [05 // TECHNICAL MATRIX]
+## ✦ 05 // SYSTEM ARCHITECTURE
 
-* **Runtime:** Cloudflare Workers, Durable Objects, Node.js.
-* **Storage:** local D1 SQLite (persistent ledger) & KV Namespace (hot cache).
-* **Interface Protocols:**
-  * **REST API:** `POST /api/signal`
-  * **WebSocket Stream:** `/stream`
-  * **Model Context Protocol (MCP):** Connects to any desktop AI client (Claude, Cursor) as a native toolset.
-* **Security & TENANCY:** Two-step HMAC-signed token approval with full database audit logging.
+The technical choices behind NightWatcher reflect our obsession with efficiency, local latency, and extreme utility.
+
+* **Runtime Environment:** Cloudflare Workers, Durable Objects, and Node.js working in harmony.
+* **Storage Layer:** local D1 SQLite database acts as a persistent ledger, paired with KV Namespace for low-latency state retrieval.
+* **Access Protocols:**
+  * **REST Gateway:** `POST /api/signal` for standard signal ingestion.
+  * **WebSocket Channels:** `/stream` for real-time telemetry.
+  * **Model Context Protocol (MCP):** Exposes execution and risk tools natively to LLM assistants (Claude, Cursor, etc.).
+* **Security Layer:** Absolute cryptographic isolation using AES-256-GCM and HMAC-signed execution tokens.
 
 ---
 
-## ✦ [06 // DIRECTORY STRUCTURE]
+## ✦ 06 // ANATOMY OF THE DIRECTORY
+
+The layout of the codebase is highly structured, mapping directly to its execution logic:
 
 ```
 NIGHTWATCHER/
-├── src/                          # Backend source files (Workers & endpoints)
-│    ├── api/                     # Setup API and signal endpoints
-│    ├── mcp/                     # Model Context Protocol tool definitions
-│    ├── policy/                  # Pre-trade Policy Engine checks
+├── src/                          # The core engine source
+│    ├── api/                     # Setup API and signal gateways
+│    ├── mcp/                     # Model Context Protocol declarations
+│    ├── policy/                  # Pre-trade policy constraints
 │    └── durable-objects/         # Stateful session control
-├── dashboard/                    # React frontend dashboard UI
-├── migrations/                   # Local database schema definitions
-├── strategies/                   # Algorithmic strategy runners
-├── scripts/                      # Production API & execution scripts
-└── _archive/                     # Ignored local backup directory
+├── dashboard/                    # React frontend application
+├── migrations/                   # Local database schema versions
+├── strategies/                   # Isolated algorithmic strategy files
+├── scripts/                      # Production API & execution tools
+└── _archive/                     # Archived materials
 ```
 
 ---
 
-## ✦ [07 // DISCLAIMER]
+## ✦ 07 // A MANDATORY CLARITY (DISCLAIMER)
 
-This software is for **educational and informational purposes only.** Nothing in this repository constitutes financial, investment, advisory, legal, or tax advice. All trading decisions are made at your own risk. Markets are highly volatile, and you can lose some or all of your capital. The authors are not responsible for any financial losses resulting from the use of this software. Always start with Paper Trading enabled and never trade with capital you cannot afford to lose.
+This system is an exploration of quantitative technology, provided strictly for educational and informational purposes. No part of this repository represents financial, investment, legal, or tax advice. All trading decisions involve significant risk and are yours alone. Markets are volatile; you should only trade with capital you can afford to lose. We strongly advocate for testing via Paper Trading environments before deploying live capital.
 
 ---
 <sup>Licensed under the MIT License. Built with a commitment to privacy, performance, and self-sovereign code.</sup>
