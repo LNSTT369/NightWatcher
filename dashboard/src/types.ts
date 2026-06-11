@@ -192,7 +192,7 @@ export interface PositionHistory {
   timestamps: number[]
 }
 
-// V3 types
+// Regime & risk types
 export type MarketRegime =
   | 'trending_bull'
   | 'trending_bear'

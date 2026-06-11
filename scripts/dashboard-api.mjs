@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * NIGHTWATCHER V3 — Dashboard API Bridge
+ * NIGHTWATCHER — Dashboard API Bridge
  *
  * HTTP server on port 3001 that connects to the MCP server (port 8787)
  * and serves the data the React dashboard expects.
@@ -96,7 +96,7 @@ function readActivityLogs(maxEntries = 150) {
     .slice(-maxEntries);
 }
 
-// ── Default V3 config (returned to dashboard) ─────────────────────────────────
+// ── Default config (returned to dashboard) ─────────────────────────────────
 
 const DEFAULT_CONFIG = {
   mcp_url: MCP_URL,

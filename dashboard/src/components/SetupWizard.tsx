@@ -118,7 +118,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         {step === 1 && (
           <div className="space-y-6">
             <div className="text-center py-4">
-              <h2 className="text-2xl font-light text-hud-text-bright mb-2">NIGHTWATCHER V3</h2>
+              <h2 className="text-2xl font-light text-hud-text-bright mb-2">NIGHTWATCHER</h2>
               <p className="text-hud-primary text-sm font-medium tracking-wide">
                 Universal execution layer for autonomous trading
               </p>

@@ -1,5 +1,5 @@
 /**
- * Policy Engine - Trade Validation System (V3)
+ * Policy Engine - Trade Validation System
  * 
  * Safety layer that validates every order before execution.
  * Decoupled from speculative research, enforcing mathematically computed bounds.
@@ -18,7 +18,7 @@ import type { FactorExposure } from "../risk/factor";
 
 export interface PolicyContext {
   order?: OrderPreview; // Backwards-compatibility
-  intent?: TradeIntent;   // Unified V3 intent contract
+  intent?: TradeIntent;   // Unified intent contract
   account: Account;
   positions: Position[];
   clock: MarketClock;

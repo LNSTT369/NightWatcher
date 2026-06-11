@@ -1,4 +1,4 @@
-# ░▒▓ NIGHTWATCHER V3 // THE PURITY OF QUANTITATIVE EXECUTION
+# ░▒▓ NIGHTWATCHER // THE PURITY OF QUANTITATIVE EXECUTION
 
 *A self-hosted, policy-gated quantitative rail. Built with absolute intent. Designed for total data sovereignty.*
 
@@ -11,14 +11,14 @@
 ```
 
 <p align="center">
-  <img src="assets/dashboard_brutalist.png" alt="NightWatcher V3 Dashboard" width="700" style="border: 2px solid #000000;">
+  <img src="assets/dashboard_brutalist.png" alt="NightWatcher Dashboard" width="700" style="border: 2px solid #000000;">
 </p>
 
 ---
 
 ## ✦ 01 // THE ESSENCE OF NIGHTWATCHER
 
-At its core, NightWatcher V3 is a study in reduction. We wanted to design a quantitative trading infrastructure that strips away the arbitrary complexity of traditional family office setups. What remains is a singular, unified platform that runs specialized LLM-powered agents and deterministic algorithmic runners with absolute precision. 
+At its core, NightWatcher is a study in reduction. We wanted to design a quantitative trading infrastructure that strips away the arbitrary complexity of traditional family office setups. What remains is a singular, unified platform that runs specialized LLM-powered agents and deterministic algorithmic runners with absolute precision. 
 
 It is designed to sit quietly at the edge of your local architecture. It does not compromise. It debates risk, analyzes equities, and routes execution orders to Alpaca—all while preserving your data sovereignty. Every detail, from the high-contrast brutalist layout to the monospace-driven typography, has been engineered to feel deliberate and profoundly functional.
 
@@ -49,7 +49,7 @@ When you run this script, three distinct phases occur in perfect coordination:
 Once the startup sequence completes, point your browser to `http://localhost:3000`. You will be welcomed by a clean, local Setup Wizard. Here, you define your Alpaca API credentials. They are immediately encrypted using AES-GCM (powered by your local `KILL_SWITCH_SECRET`) and committed directly to your local database. Your keys and trade data remain entirely yours, residing solely on your device.
 
 <p align="center">
-  <img src="assets/setup_wizard_brutalist.png" alt="NightWatcher V3 Setup Wizard" width="400" style="border: 2px solid #000000;">
+  <img src="assets/setup_wizard_brutalist.png" alt="NightWatcher Setup Wizard" width="400" style="border: 2px solid #000000;">
 </p>
 
 ---

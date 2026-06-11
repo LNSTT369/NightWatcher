@@ -71,7 +71,7 @@ export async function handlePortalGet(request: Request, env: Env): Promise<Respo
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NightWatcher V3 — Alpha Portal</title>
+  <title>NightWatcher — Alpha Portal</title>
   
   <!-- Premium Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -580,7 +580,7 @@ export async function handlePortalGet(request: Request, env: Env): Promise<Respo
     <!-- Top Bar -->
     <header>
       <div class="brand">
-        <h1>NightWatcher V3 — Alpha Socket</h1>
+        <h1>NightWatcher — Alpha Socket</h1>
         <p>Execution layer portal // secure signal onboarding</p>
       </div>
       <div class="auth-box">
@@ -959,7 +959,7 @@ func main() {
 
     <!-- Footer -->
     <footer>
-      NightWatcher V3. Built for millisecond-scale institutional smart order execution. View <a href="/health" target="_blank">Health Monitor</a>.
+      NightWatcher. Built for millisecond-scale institutional smart order execution. View <a href="/health" target="_blank">Health Monitor</a>.
     </footer>
 
   </div>

@@ -37,7 +37,7 @@ export async function fetchStrategyFromGithub(
   
   const resp = await fetch(rawUrl, {
     headers: {
-      "User-Agent": "NightWatcher-V3-Cloner",
+      "User-Agent": "NightWatcher-Cloner",
     },
   });
 

@@ -66,7 +66,7 @@ function getSentimentColor(score: number): string {
   return 'text-hud-warning'
 }
 
-// ─── V3 color / label helpers ─────────────────────────────────────────────────
+// ─── Color / label helpers ─────────────────────────────────────────────────
 
 const REGIME_LABELS: Record<MarketRegime, string> = {
   trending_bull:   'TRENDING BULL',
@@ -234,7 +234,7 @@ export default function App() {
   const [historyPeriod, setHistoryPeriod] = useState<'1D' | '1W' | '1M'>('1D')
   const logsEndRef = useRef<HTMLDivElement>(null)
 
-  // V3 state
+  // State
   const [regime, setRegime] = useState<RegimeState | null>(null)
   const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null)
   const [alphaSignals, setAlphaSignals] = useState<AlphaSignal[]>([])
@@ -301,7 +301,7 @@ export default function App() {
     return () => clearInterval(id)
   }, [setupChecked, showSetup, historyPeriod, status?.account])
 
-  // ── V3: regime ─────────────────────────────────────────────────────────────
+  // ── Regime ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!setupChecked || showSetup) return
     const fetch$ = async () => {
@@ -316,7 +316,7 @@ export default function App() {
     return () => clearInterval(id)
   }, [setupChecked, showSetup])
 
-  // ── V3: risk metrics ───────────────────────────────────────────────────────
+  // ── Risk metrics ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!setupChecked || showSetup) return
     const fetch$ = async () => {
@@ -331,7 +331,7 @@ export default function App() {
     return () => clearInterval(id)
   }, [setupChecked, showSetup])
 
-  // ── V3: alpha signals ──────────────────────────────────────────────────────
+  // ── Alpha signals ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!setupChecked || showSetup) return
     const fetch$ = async () => {
@@ -346,7 +346,7 @@ export default function App() {
     return () => clearInterval(id)
   }, [setupChecked, showSetup])
 
-  // ── V3: strategy runner status ─────────────────────────────────────────────
+  // ── Strategy runner status ─────────────────────────────────────────────
   useEffect(() => {
     if (!setupChecked || showSetup) return
     const fetch$ = async () => {
@@ -474,7 +474,7 @@ export default function App() {
     return { label: pos.symbol, data: hist.map(p => ((p - start) / start) * 100), variant: positionColors[idx % positionColors.length] }
   }).filter(Boolean) as { label: string; data: number[]; variant: typeof positionColors[number] }[], [equityPositions, positionPriceHistories])
 
-  // V3 regime accent color
+  // Regime accent color
   const regimeAccent = regime ? REGIME_HEX[regime.regime] : undefined
 
   // ── Early returns ──────────────────────────────────────────────────────────
@@ -522,7 +522,6 @@ export default function App() {
                 >
                   NIGHTWATCHER
                 </h1>
-                <span className="hud-label text-white bg-black border-2 border-black px-1.5 py-0.5 shrink-0">V3</span>
               </div>
               <p className="hud-label mt-1 text-black opacity-60" style={{ letterSpacing: '0.12em' }}>
                 // AUTONOMOUS TRADING OPERATIONS // INTEGRATED WORKFLOW
@@ -1017,9 +1016,9 @@ export default function App() {
             </Panel>
           </div>
 
-          {/* V3 Alpha Signals */}
+          {/* Alpha Signals */}
           <div className="col-span-4 md:col-span-8 lg:col-span-3">
-            <Panel title="ALPHA.SIGNALS // V3 GENERATION" titleRight={alphaSignals.length > 0 ? alphaSignals.length.toString() : '—'} className="h-full min-h-[200px]">
+            <Panel title="ALPHA.SIGNALS // GENERATION" titleRight={alphaSignals.length > 0 ? alphaSignals.length.toString() : '—'} className="h-full min-h-[200px]">
               <div className="overflow-y-auto h-full space-y-0.5">
                 {alphaSignals.length === 0 ? (
                   <div className="hud-label text-hud-text-dim py-8 text-center space-y-1">
