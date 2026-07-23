@@ -2,14 +2,6 @@
 
 *A self-hosted, policy-gated quantitative rail. Built with absolute intent. Designed for total data sovereignty.*
 
-```
- ╔═══════════════════════════════════════════════════════════════════╗
- ║  [SYSTEM // ACTIVE]                                               ║
- ║  → 7 Quant Strategies   → Pre-Trade Policy Gate (14 Constraints)  ║
- ║  → D1 Local Ledger      → Interactive Tenancy Onboarding Wizard   ║
- ╔═══════════════════════════════════════════════════════════════════╝
-```
-
 <p align="center">
   <img src="assets/dashboard_brutalist.png" alt="NightWatcher Dashboard" width="700" style="border: 2px solid #000000;">
 </p>
