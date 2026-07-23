@@ -1,4 +1,4 @@
-# ░▒▓ NIGHTWATCHER // THE PURITY OF QUANTITATIVE EXECUTION
+# ░▒▓ NIGHTWATCHER // 
 
 *A self-hosted, policy-gated quantitative rail. Built with absolute intent. Designed for total data sovereignty.*
 
